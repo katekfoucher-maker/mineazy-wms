@@ -1,0 +1,52 @@
+# --- core ---
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-multipart==0.0.19
+jinja2==3.1.4              # server-rendered web UI
+itsdangerous==2.2.0       # signed session cookies
+bcrypt==4.2.1             # password hashing
+
+# --- database drivers ---
+PyMySQL==1.1.1          # MySQL:  mysql+pymysql://user:pass@host:3306/db
+cryptography==44.0.0    # PyMySQL caching_sha2_password auth
+
+# --- data / analytics / viz ---
+pandas==2.2.3          # NeuralProphet 0.9 breaks on pandas >= 3
+numpy==1.26.4
+matplotlib==3.9.3
+seaborn==0.13.2
+
+# --- weekly demand model: neural / ML candidates (optional) ---
+torch                  # ES-RNN + windowed LSTM  (CPU wheel: --index-url https://download.pytorch.org/whl/cpu)
+neuralprophet          # global AR-Net; OFF by default, see config.weekly_neuralprophet
+xgboost>=3.0           # "gbm" feature model; native Booster API, no scikit-learn needed
+lightgbm>=4.0          # "lgbm" feature model; native lgb.train API
+# scipy comes in as an xgboost dependency (also used for the learned blend weights)
+
+# --- exports ---
+openpyxl==3.1.5
+XlsxWriter==3.2.0
+fpdf2>=2.8            # allocation-plan PDF (wms/exports/pdf.py)
+
+# --- document import (New Back Order / Receiving Order upload) ---
+pdfplumber==0.11.10     # parse HansaWorld "Stock Movement" PDFs
+pytesseract==0.3.13     # OCR a photo/scan of an invoice (Receiving Orders); also
+                        # needs the Tesseract OCR engine itself on the server -
+                        # not a pip package: `apt install tesseract-ocr` (Linux)
+                        # or the UB-Mannheim build (Windows: winget install
+                        # UB-Mannheim.TesseractOCR)
+
+# --- interactive console ---
+questionary==2.0.1
+rich==13.9.4
+tabulate==0.9.0
+
+# --- migrations ---
+alembic==1.14.0
+
+# --- test ---
+pytest==8.3.4
+httpx==0.28.1

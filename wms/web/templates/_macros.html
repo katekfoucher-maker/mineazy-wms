@@ -1,0 +1,56 @@
+{% macro ic(name) %}
+{%- set paths = {
+  'plus':'M12 5v14M5 12h14',
+  'list':'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  'chart':'M3 3v18h18M7 15l4-4 3 3 5-6',
+  'doc':'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h6',
+  'upload':'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12',
+  'search':'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35',
+  'warn':'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
+  'flow':'M3 4h18l-7 8v6l-4 2v-8z',
+  'box':'M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16zM3.27 6.96 12 12.01l8.73-5.05M12 22.08V12',
+  'growth':'M1 18L8.5 10.5L13.5 15.5L23 6M17 6H23V12',
+  'tag':'M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82zM7 7h.01',
+  'inbox':'M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z'
+} -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round"><path d="{{ paths.get(name,'') }}"/></svg>
+{%- endmacro %}
+
+{% macro table(rows, cols=None, pills=None) %}
+  {% if not rows %}
+    <p class="muted">No rows.</p>
+  {% else %}
+    {% set keys = cols or rows[0].keys() %}
+    <div class="scroll"><table>
+      <thead><tr>{% for k in keys %}<th>{{ k }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>{% for k in keys %}
+          <td>
+          {% set v = r.get(k) %}
+          {% if pills and k in pills and v is not none %}<span class="pill {{ v }}">{{ v }}</span>
+          {% elif v is none %}<span class="muted">-</span>
+          {% elif v is number and v == v|round(0) %}{{ '{:,}'.format(v|int) }}
+          {% elif v is number %}{{ '{:,.2f}'.format(v) }}
+          {% else %}{{ v }}{% endif %}
+          </td>
+        {% endfor %}</tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  {% endif %}
+{% endmacro %}
+
+{% macro kpis(d) %}
+  <div class="kpis">
+  {% for k, v in d.items() %}
+    <div class="kpi"><div class="n">
+      {% if v is mapping %}{{ v|length }}
+      {% elif v is number and v == v|round(0) %}{{ '{:,}'.format(v|int) }}
+      {% elif v is number %}{{ '{:,.2f}'.format(v) }}
+      {% elif v is none %}-{% else %}{{ v }}{% endif %}
+    </div><div class="l">{{ k.replace('_',' ') }}</div></div>
+  {% endfor %}
+  </div>
+{% endmacro %}

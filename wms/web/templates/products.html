@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Products — Mineazy{% endblock %}
+{% block heading %}Products{% endblock %}
+{% block subheading %}The product catalogue (name / category / price reference for SKUs){% endblock %}
+{% block body %}
+
+<style>
+  .prod-form{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+  .prod-form > div{min-width:160px;flex:1 1 160px}
+  .prod-form input, .prod-form select{width:100%}
+  .prod-form .wide{flex:2 1 260px}
+</style>
+
+{% if can(user.role, 'products.manage') %}
+<div class="card">
+  <div class="card-head"><h2>{{ m.ic('plus') }} Add or update a product</h2></div>
+  <form method="post" action="/products/new" class="prod-form">
+    <div class="wide"><label>SKU *</label>
+      <input type="text" name="sku" required autocomplete="off" placeholder="e.g. CTBN0104"></div>
+    <div class="wide"><label>Product name *</label>
+      <input type="text" name="name" required autocomplete="off" placeholder="e.g. drywall screw 3.5*32 (10pcs)"></div>
+    <div><label>Category</label>
+      <input type="text" name="category" list="prod_categories" autocomplete="off" placeholder="optional"></div>
+    <div><label>Unit price</label>
+      <input type="number" name="unit_price" step="0.01" min="0" autocomplete="off" placeholder="optional"></div>
+    <div style="min-width:0;flex:0 0 auto"><button type="submit">Save product</button></div>
+  </form>
+  <datalist id="prod_categories">
+    {% for c in categories %}<option value="{{ c }}">{% endfor %}
+  </datalist>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h2>{{ m.ic('tag') }} Product catalogue</h2></div>
+  <p class="mini muted" style="margin:-6px 0 14px">
+    Showing {{ '{:,}'.format(shown) }} of {{ '{:,}'.format(total) }} product(s).
+  </p>
+  <form class="inline" method="get" action="/products">
+    <div style="min-width:220px"><label>Search</label>
+      <input type="text" name="q" value="{{ q }}" placeholder="SKU or product name" autocomplete="off"></div>
+    <div style="min-width:180px"><label>Category</label>
+      <select name="category" onchange="this.form.requestSubmit()">
+        <option value="">All categories</option>
+        {% for c in categories %}
+          <option value="{{ c }}" {{ 'selected' if category == c }}>{{ c }}</option>
+        {% endfor %}
+      </select></div>
+    <div style="min-width:0"><button type="submit">Filter</button></div>
+  </form>
+
+  {% if not products %}
+    <p class="mini muted" style="margin:8px 0 0">
+      {% if q or category %}Nothing matches that filter.{% else %}No products yet.{% endif %}
+    </p>
+  {% else %}
+  <div class="tbl-wrap"><table class="fit">
+    <thead><tr><th>SKU</th><th>Product</th><th>Category</th>
+      <th class="num">Unit price</th></tr></thead>
+    <tbody>
+    {% for p in products %}
+      <tr><td>{{ p.sku }}</td><td>{{ p.name }}</td>
+        <td>{{ p.category or '' }}</td>
+        <td class="num">{{ '%.2f'|format(p.unit_price) if p.unit_price is not none else '' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+</div>
+
+{% endblock %}

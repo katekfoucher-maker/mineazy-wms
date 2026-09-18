@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Stock Movement {{ doc.dn_no }} — Mineazy{% endblock %}
+{% block heading %}Stock Movement {{ doc.dn_no }}{% endblock %}
+{% block subheading %}{{ doc.from_location }} → {{ doc.branch }} · {{ doc.doc_date }} ·
+  requested {{ doc.total_requested }} · dispatched {{ doc.total_sent }} ·
+  backorder {{ doc.total_requested - doc.total_sent }}{% endblock %}
+{% block actions %}<a class="btn ghost" href="/backorders">← Active back orders</a>{% endblock %}
+{% block body %}
+<div class="card">
+<table>
+<thead><tr><th>Product</th><th>Description</th><th>Requested</th><th>Sent</th><th>Backorder</th></tr></thead>
+<tbody>
+{% for l in doc['lines'] %}
+<tr>
+  <td>{{ l.sku }}</td><td>{{ l.description }}</td>
+  <td>{{ l.requested_qty }}</td><td>{{ l.sent_qty }}</td>
+  <td>{% if l.backorder_qty %}<span class="pill NIL">{{ l.backorder_qty }}</span>{% else %}0{% endif %}</td>
+</tr>
+{% endfor %}
+</tbody></table>
+</div>
+{% endblock %}

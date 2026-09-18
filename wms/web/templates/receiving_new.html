@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Receiving Orders — Mineazy{% endblock %}
+{% block heading %}Receiving Orders{% endblock %}
+{% block subheading %}Products arriving into the warehouse{% endblock %}
+{% block body %}
+
+<div class="card" id="upload">
+  <div class="card-head"><h2>{{ m.ic('upload') }} Import from document</h2></div>
+  <form method="post" action="/receiving/new/upload" enctype="multipart/form-data" class="inline">
+    <div style="min-width:320px">
+      <label>Photo/scan, PDF, CSV or Excel of the receiving document</label>
+      <input type="file" name="files" multiple
+             accept=".pdf,.csv,.tsv,.txt,.xlsx,.xlsm,.xls,.jpg,.jpeg,.png,.bmp,.tif,.tiff,.webp"
+             required>
+      <p class="filedrop-hint">or drag and drop the file(s) here - select or drop
+        all the pages/photos of a multi-page document together</p>
+    </div>
+    <button type="submit">{{ m.ic('upload') }} Parse &amp; fill</button>
+  </form>
+</div>
+
+{% if prefill and prefill.warnings %}
+  <div class="flash info">{{ prefill.warnings|join(' ') }}</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h2>Receiving details</h2></div>
+  <form method="post" action="/receiving/new" id="roform">
+    <div class="inline">
+      <div><label>Invoice No.</label>
+        <input name="ro_no" value="{{ prefill.ro_no or '' }}"
+               placeholder="your invoice number (auto RO-000123 if blank)"></div>
+      <div><label>Location</label>
+        <select name="branch_id" required>
+          <option value="">Select…</option>
+          {% for b in branches %}
+            <option value="{{ b.id }}"
+              {{ 'selected' if (prefill.branch_id if prefill and prefill.branch_id else default_branch_id) == b.id }}>{{ b.code }} — {{ b.name }}</option>
+          {% endfor %}
+        </select></div>
+      <div><label>Date</label>
+        <input type="date" name="doc_date" value="{{ prefill.doc_date or today }}"></div>
+      <div><label>Supplier</label>
+        <input name="supplier" placeholder="optional"
+               value="{{ prefill.supplier if prefill and prefill.supplier else '' }}"></div>
+    </div>
+    <div><label>Notes</label>
+      <input name="notes" style="width:100%" value="{{ prefill.notes if prefill and prefill.notes else '' }}"></div>
+
+    <h3>Line items</h3>
+    <div class="scroll"><table id="lines">
+      <thead><tr>
+        <th style="min-width:180px">Product</th><th>Description</th>
+        <th style="width:120px">Qty</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% set rows = (prefill.lines if prefill and prefill.lines else [{'sku':'','description':'','received_qty':''}]) %}
+        {% for r in rows %}
+        <tr>
+          <td><input name="sku" list="skus" value="{{ r.sku }}" required></td>
+          <td><input name="description" value="{{ r.description }}" placeholder="auto" readonly
+                     style="background:#f8f9fc;border-style:dashed"></td>
+          <td><input name="received_qty" type="number" min="1" value="{{ r.received_qty }}" required></td>
+          <td><button type="button" class="ghost" onclick="this.closest('tr').remove();recalc()">✕</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot><tr>
+        <th style="text-align:right">Total received</th>
+        <th><output id="recv-total">0</output></th><th></th>
+      </tr></tfoot>
+    </table></div>
+    <datalist id="skus">
+      {% for p in products %}<option value="{{ p.sku }}">{{ p.name }}</option>{% endfor %}
+    </datalist>
+    <p><button type="button" class="ghost" onclick="addRow()">{{ m.ic('plus') }} Add line</button></p>
+
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0 12px">
+      <input type="checkbox" id="confirm" style="width:auto" required>
+      I have reviewed the quantities above — received units will be added to
+      the location's stock on hand.
+    </label>
+    <button type="submit">Confirm receipt</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Receiving records</h2></div>
+  <div class="scroll"><table class="fit">
+    <thead><tr>
+      <th>Reference</th><th>Location</th><th>Supplier</th><th>Date</th>
+      <th class="num">Lines</th><th class="num">Received</th><th style="width:70px"></th>
+    </tr></thead>
+    <tbody>
+    {% for r in receipts %}
+      <tr>
+        <td><strong>{{ r.ro_no }}</strong></td>
+        <td>{{ r.branch }}</td>
+        <td>{{ r.supplier or '—' }}</td>
+        <td>{{ r.doc_date }}</td>
+        <td class="num">{{ r.lines }}</td>
+        <td class="num">{{ '{:,}'.format(r.received) }}</td>
+        <td>
+          <form method="post" action="/receiving/{{ r.ro_no }}/delete"
+                onsubmit="return confirm('Reverse receiving order {{ r.ro_no }}?\n\nThis pulls its received units back out of stock and deletes the record.')">
+            <button type="submit" class="danger" title="Reverse this receiving order">✕</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="empty">No receiving orders recorded yet</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+<script>
+function recalc(){
+  var total = 0;
+  document.querySelectorAll('#lines tbody tr').forEach(function(tr){
+    total += parseInt(tr.querySelector('[name=received_qty]').value) || 0;
+  });
+  document.getElementById('recv-total').textContent = total;
+}
+document.querySelectorAll('#lines [name=received_qty]').forEach(function(i){
+  i.addEventListener('input', recalc);
+});
+function addRow(){
+  var b = document.querySelector('#lines tbody');
+  var tr = b.rows[0].cloneNode(true);
+  tr.querySelectorAll('input').forEach(function(i){ i.value=''; });
+  tr.querySelector('[name=received_qty]').addEventListener('input', recalc);
+  b.appendChild(tr);
+  recalc();
+}
+document.getElementById('roform').addEventListener('submit', function(e){
+  var ref = document.querySelector('[name=ro_no]').value.trim() || '(auto)';
+  var total = document.getElementById('recv-total').textContent;
+  var lines = document.querySelectorAll('#lines tbody tr').length;
+  if(!confirm('Confirm receiving order ' + ref + '?\n\n'
+              + lines + ' line(s) · ' + total + ' unit(s) added to stock')){
+    e.preventDefault();
+  }
+});
+recalc();
+</script>
+{% endblock %}

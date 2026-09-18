@@ -1,0 +1,38 @@
+services:
+  db:
+    image: mysql:8.0
+    command: --default-authentication-plugin=caching_sha2_password
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_USER: wms
+      MYSQL_PASSWORD: wms_password
+      MYSQL_DATABASE: mineazy_wms
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysqldata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uwms", "-pwms_password"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql+pymysql://wms:wms_password@db:3306/mineazy_wms
+      OUTPUT_DIR: /data/output
+    volumes:
+      - outputdata:/data/output
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "python -m wms.scripts.seed || true &&
+             uvicorn wms.api.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  mysqldata:
+  outputdata:

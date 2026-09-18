@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.venv311/
+*.db
+.env
+output/
+.pytest_cache/
+.vscode/*.log
+# real business exports (sales history / inventory snapshots) - not source code
+data/
+scratch/

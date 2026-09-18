@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Back Order Management — Mineazy{% endblock %}
+{% block heading %}Back Order Management{% endblock %}
+{% block subheading %}Manage, allocate, and track branch back orders{% endblock %}
+{% block actions %}
+  <a class="btn ghost" href="/dispatch/new#upload">{{ m.ic('upload') }} Upload document</a>
+  <a class="btn" href="/dispatch/new">{{ m.ic('plus') }} New recon</a>
+{% endblock %}
+{% block body %}
+<div class="card">
+  <div class="card-head">
+    <h2><span class="amber">{{ m.ic('warn') }}</span> Active Back Orders</h2>
+    <form class="toolbar" method="get">
+      <select name="stage" onchange="this.form.submit()">
+        <option value="">All Stages</option>
+        {% for val, lbl in stage_choices %}
+          <option value="{{ val }}" {{ 'selected' if stage == val }}>{{ lbl }}</option>
+        {% endfor %}
+      </select>
+      <select name="branch_id" onchange="this.form.submit()">
+        <option value="">All branches</option>
+        {% for b in branches %}<option value="{{ b.id }}" {{ 'selected' if branch_id == b.id }}>{{ b.name }}</option>{% endfor %}
+      </select>
+      <div class="search">{{ m.ic('search') }}
+        <input name="q" value="{{ q }}" placeholder="Search Stock Movement…" style="width:220px">
+      </div>
+    </form>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>Back order</th><th>Branch</th><th>Week</th><th>Stage</th>
+      <th>Lines</th><th>Fulfillment</th><th>Status</th><th style="text-align:right">Actions</th>
+    </tr></thead>
+    <tbody>
+    {% for o in orders %}
+      <tr>
+        <td><a href="/backorders/{{ o.bo_no }}"><strong>{{ o.bo_no }}</strong></a>
+            {% if o.source_ref %}<span class="muted" style="display:block;font-size:12px">{{ o.source_ref }}</span>{% endif %}</td>
+        <td>{{ o.branch }}</td>
+        <td>{{ o.period_label or cycle_label.get(o.cycle, o.cycle) }}</td>
+        <td><span class="pill {{ o.stage }}">{{ stage_label[BOStage(o.stage)] }}</span></td>
+        <td>{{ o.line_count }}</td>
+        <td>
+          <span class="progress"><i style="width:{{ (o.fulfil_pct*100)|round(0)|int }}%"></i></span>
+          <span class="muted">{{ (o.fulfil_pct*100)|round(0)|int }}% · {{ o.qty_fulfilled }}/{{ o.qty_ordered }}</span>
+        </td>
+        <td><span class="pill {{ o.status }}">{{ o.status }}</span></td>
+        <td style="text-align:right"><a class="btn ghost" href="/backorders/{{ o.bo_no }}">Open</a></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="empty">No back orders found</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

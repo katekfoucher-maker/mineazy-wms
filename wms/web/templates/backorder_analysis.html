@@ -1,0 +1,772 @@
+{% extends "base.html" %}
+{% block title %}Flow Analysis · Mineazy{% endblock %}
+{% block heading %}Flow Analysis{% endblock %}
+{% block actions %}{% endblock %}
+{% block body %}
+
+<style>
+  /* this page scrolls at the document level (html is scrollingElement), so
+     the browser's own CSS scroll-anchoring lives there too - it fights the
+     JS-driven scroll compensation below, landing a delayed extra jump a
+     second or two after a swapped panel resizes. The swapped panels below
+     already compensate precisely for their own resize, so it's turned off
+     document-wide rather than on the panels themselves (setting it there
+     does nothing - only the actual scrolling container's value matters) */
+  html { overflow-anchor: none; }
+</style>
+
+{% if kpis %}
+<style>
+  .kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+    gap:14px;margin:0 0 18px}
+  .kpi{background:#fff;border:1px solid var(--line-soft);border-top:3px solid var(--brand);
+    border-radius:10px;padding:13px 15px 12px;box-shadow:var(--shadow-card)}
+  .kpi .k-label{font-size:11px;color:var(--muted);letter-spacing:.02em;
+    text-transform:uppercase;margin:0 0 6px}
+  .kpi .k-value{font-size:23px;font-weight:700;color:var(--ink);line-height:1.1;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kpi .k-sub{font-size:11px;color:var(--muted);margin-top:4px}
+  .kpi .k-delta{display:inline-block;font-size:11px;font-weight:700;margin-left:7px;
+    padding:1px 6px;border-radius:6px;vertical-align:middle}
+  .kpi .k-delta.up{color:#0f7b3d;background:#e6f4ec}
+  .kpi .k-delta.down{color:#b23b4a;background:#fbe9ec}
+</style>
+<div class="kpi-row">
+  {% for k in kpis %}
+  <div class="kpi">
+    <p class="k-label">{{ k.label }}</p>
+    <div class="k-value" title="{{ k.value }}">{{ k.value }}
+      {%- if k.delta is defined and k.delta is not none %}
+        {% set _pos = (k.delta > 0) %}
+        <span class="k-delta {{ 'up' if _pos else 'down' }}">{{ '%+.1f'|format(k.delta) }}%</span>
+      {%- endif %}
+    </div>
+    {% if k.sub %}<div class="k-sub">{{ k.sub }}</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if growth.has_data %}
+<style>
+  .growth-bar-card{margin:0 0 18px}
+  .growth-bar{display:block;width:100%;height:220px;margin-top:6px}
+</style>
+{% endif %}
+
+{% macro pva_table(v) %}
+  {% if v.rows %}
+  {% set multi = v.weeks|length > 1 %}
+  <div class="tbl-wrap"><table class="fit">
+    <thead>
+      <tr>
+        <th {{ 'rowspan=2' if multi }}>Location</th><th {{ 'rowspan=2' if multi }}>SKU</th>
+        <th {{ 'rowspan=2' if multi }}>Product</th>
+        {% if multi %}{% for w in v.weeks %}<th class="num" colspan="2">{{ w }}</th>{% endfor %}{% endif %}
+        <th class="num" {{ 'rowspan=2' if multi }}>Predicted</th>
+        <th class="num" {{ 'rowspan=2' if multi }}>Actual</th>
+        <th class="num" {{ 'rowspan=2' if multi }}>Error</th>
+        <th class="num" {{ 'rowspan=2' if multi }}>WAPE&nbsp;%</th>
+      </tr>
+      {% if multi %}<tr>{% for w in v.weeks %}<th class="num"><span class="mini">pred</span></th>
+        <th class="num"><span class="mini">actual</span></th>{% endfor %}</tr>{% endif %}
+    </thead>
+    <tbody>
+    {% for r in v.rows %}
+      <tr>
+        <td>{{ r.location }}</td><td>{{ r.sku }}</td><td>{{ r.product }}</td>
+        {% if multi %}{% for wk in r.weeks %}
+          <td class="num fc-hi">{{ '{:,}'.format(wk.pred) }}</td>
+          <td class="num fc-act">{{ '{:,}'.format(wk.actual) }}</td>
+        {% endfor %}{% endif %}
+        <td class="num fc-hi">{{ '{:,}'.format(r.predicted) }}</td>
+        <td class="num fc-act">{{ '{:,}'.format(r.actual) }}
+          {%- if r.stockout %} <span class="pill NIL" title="Out of stock {{ r.stockout }} of the held-out week(s): the low sale is a supply gap, not a forecast miss, so it is left out of WAPE.">stockout {{ r.stockout }}w</span>{% endif %}</td>
+        {# error = actual - predicted: positive => predicted below actual (red), negative => above (green) #}
+        <td class="num {{ 'err neg' if r.error > 0 else ('err pos' if r.error < 0 else 'err') }}">
+          {%- if r.error > 0 %}+{% endif %}{{ '{:,}'.format(r.error) }}</td>
+        <td class="num">{{ r.wape if r.wape is not none else '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">No weekly sales history yet. Upload weekly files on the
+    <a href="/analytics?tab=demand">Sales &amp; Forecasting</a> page.</p>
+  {% endif %}
+{% endmacro %}
+
+{% macro pie_card(mix, title, top=8) %}
+<div class="card">
+  <div class="card-head"><h3>{{ title }} ({{ mix.branch_label }})</h3></div>
+  {% if mix.highlight %}
+    {% if mix.highlight.found %}
+    <p class="muted" style="margin:0 0 10px">
+      <b style="color:var(--ink)">{{ mix.highlight.name }}</b> is
+      <b style="color:var(--brand-ink)">{{ '%.4f'|format(mix.highlight.pct) }}%</b> of {{ mix.metric_label }},
+      rank {{ mix.highlight.rank }} of {{ mix.highlight.n_total }} products
+      ({{ mix.branch_label }}).</p>
+    {% else %}
+    <p class="muted" style="margin:0 0 10px">No {{ mix.metric_label }} found for
+      &ldquo;{{ mix.highlight.sku }}&rdquo; in {{ mix.branch_label }}.</p>
+    {% endif %}
+  {% endif %}
+  {% if mix.has_data and mix.slices %}
+  <div class="pie-row" style="display:flex;gap:20px;flex-wrap:wrap;align-items:center">
+    <svg viewBox="0 0 {{ mix.svg.w }} {{ mix.svg.h }}" width="200" height="200"
+         style="flex:0 0 auto">
+      {% for s in mix.slices %}
+        <path d="{{ s.path }}" fill="{{ s.colour }}"
+              stroke="{{ 'var(--ink)' if s.highlight else '#fff' }}"
+              stroke-width="{{ '3' if s.highlight else '1.5' }}">
+          <title>{{ s.label }}: {{ '%.4f'|format(s.pct) }}%</title>
+        </path>
+      {% endfor %}
+    </svg>
+    <ul style="list-style:none;margin:0;padding:0;flex:1 1 220px;min-width:0;font-size:12px">
+      {% for s in mix.legend %}
+      <li style="display:flex;align-items:center;gap:8px;padding:3px 0;min-width:0;
+            {{ 'background:var(--brand-soft);border-radius:6px;margin:0 -6px;padding:3px 6px' if s.highlight }}">
+        <span style="width:11px;height:11px;border-radius:3px;flex:0 0 auto;
+              background:{{ s.colour }}"></span>
+        <span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+              white-space:nowrap;{{ 'font-weight:700' if s.highlight }}">{{ s.label }}</span>
+        <b style="flex:0 0 auto">{{ '%.4f'|format(s.pct) }}%</b>
+        <span class="muted" style="flex:0 0 auto;min-width:64px;text-align:right">
+          {{ '{:,.0f}'.format(s.value) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% set other = mix.legend[-1] if mix.legend and mix.legend[-1].label == 'Other' else none %}
+  {% if other or top > 8 %}
+    <p class="mini muted" style="margin:8px 0 0">
+      {% if other %}
+        {% set hidden = mix.n_products - top %}
+        <a href="#" onclick="expandPieOther(event, {{ top }})">Show more</a>
+        &middot; {{ hidden }} more product{{ 's' if hidden != 1 }} in &ldquo;Other&rdquo;
+      {% endif %}
+      {% if other and top > 8 %} &middot; {% endif %}
+      {% if top > 8 %}
+        <a href="#" onclick="collapsePieOther(event, {{ top }})">Show less</a>
+      {% endif %}
+    </p>
+  {% endif %}
+  {% else %}
+  <p class="muted">No {{ mix.metric_label }} for this selection, or no weekly
+    sales history yet.</p>
+  {% endif %}
+</div>
+{% endmacro %}
+
+<datalist id="sales_skus">
+  {% for p in sku_options %}<option value="{{ p.sku }}">{{ p.name }}</option>{% endfor %}
+</datalist>
+
+<form class="inline" id="fa-filter" method="get">
+  <div><label>Branch</label>
+    <select name="branch_id" onchange="this.form.requestSubmit()">
+      <option value="">All branches</option>
+      {% for b in branches %}<option value="{{ b.id }}" {{ 'selected' if branch_id == b.id }}>{{ b.name }}</option>{% endfor %}
+    </select></div>
+  <div style="min-width:260px"><label>Product</label>
+    <input name="sku" value="{{ sku }}" list="sales_skus" placeholder="All products"
+           autocomplete="off" onchange="this.form.requestSubmit()"></div>
+  <div><label>View</label>
+    <select name="fa_metric" onchange="this.form.requestSubmit()">
+      <option value="sales" {{ 'selected' if fa_metric != 'inventory' and fa_metric != 'both' }}>Sales</option>
+      <option value="inventory" {{ 'selected' if fa_metric == 'inventory' }}>Inventory (on hand)</option>
+      <option value="both" {{ 'selected' if fa_metric == 'both' }}>Sales + inventory</option>
+    </select></div>
+  <div style="min-width:0"><button type="submit">Show</button></div>
+</form>
+
+<div id="sales-panel">
+
+{% if sales_series and sales_series.has_data %}
+{% set g = sales_series.svg %}
+{% set _title = 'Weekly inventory' if fa_metric == 'inventory' else ('Weekly sales + inventory' if fa_metric == 'both' else 'Weekly sales') %}
+<div class="card" id="sales-chart-card">
+  <div class="card-head">
+    <h3>{{ _title }} ({{ sales_series.branch_label }}, {{ sales_series.sku_label }})</h3>
+  </div>
+  <div style="overflow-x:auto">
+    <svg viewBox="0 0 {{ g.w }} {{ g.h }}" width="100%" preserveAspectRatio="xMidYMid meet"
+         style="display:block;min-width:600px;font:11px system-ui,-apple-system,sans-serif">
+      {% for ln in g.grid %}
+        <line x1="{{ g.x0 }}" y1="{{ ln.y }}" x2="{{ g.x1 }}" y2="{{ ln.y }}"
+              stroke="var(--line)" stroke-width="1"/>
+        <text x="{{ g.x0 - 8 }}" y="{{ ln.y + 3.5 }}" text-anchor="end" fill="var(--muted)">{{ ln.label }}</text>
+        {% if g.dual and ln.rlabel %}
+        <text x="{{ g.x1 + 8 }}" y="{{ ln.y + 3.5 }}" text-anchor="start" fill="var(--ink)" fill-opacity="0.6">{{ ln.rlabel }}</text>
+        {% endif %}
+      {% endfor %}
+      {% if g.show_inv %}
+        {% if g.inv_area %}<path d="{{ g.inv_area }}" fill="var(--ink)" fill-opacity="0.06"/>{% endif %}
+        <polyline points="{{ g.inv_line }}" fill="none" stroke="var(--ink)" stroke-width="2"
+                  stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>
+        {% for d in g.inv_dots %}
+          <circle cx="{{ d.x }}" cy="{{ d.y }}" r="3" fill="var(--ink)"
+                  data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="on hand">
+            <title>{{ d.label }}: {{ '{:,}'.format(d.value) }} on hand</title>
+          </circle>
+          <circle cx="{{ d.x }}" cy="{{ d.y }}" r="13" fill="transparent"
+                  data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="on hand"
+                  style="cursor:pointer"></circle>
+        {% endfor %}
+      {% endif %}
+      {% if g.show_sales %}
+        {% if g.area %}<path d="{{ g.area }}" fill="var(--brand-soft)"/>{% endif %}
+        <polyline points="{{ g.line }}" fill="none" stroke="var(--brand)" stroke-width="2"
+                  stroke-linejoin="round" stroke-linecap="round"/>
+        {% for d in g.dots %}
+          <circle cx="{{ d.x }}" cy="{{ d.y }}" r="3" fill="var(--brand)"
+                  data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="units">
+            <title>{{ d.label }}: {{ '{:,}'.format(d.value) }} units</title>
+          </circle>
+          <circle cx="{{ d.x }}" cy="{{ d.y }}" r="13" fill="transparent"
+                  data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="units"
+                  style="cursor:pointer"></circle>
+        {% endfor %}
+      {% endif %}
+      {% for t in g.xticks %}
+        <text x="{{ t.x }}" y="{{ g.y1 + 16 }}" text-anchor="middle" fill="var(--muted)">{{ t.label }}</text>
+      {% endfor %}
+    </svg>
+  </div>
+  <p class="muted sales-readout" style="margin:6px 0 0">
+    {% if fa_metric == 'both' %}
+      <span style="color:var(--brand)">&#9632;</span> sales &nbsp;
+      <span style="color:var(--ink)">&#9632;</span> on hand (dashed). Click a point for its week.
+    {% else %}
+      Click a point to see its week.
+    {% endif %}
+    {% if fa_metric == 'inventory' %}
+      {%- if sales_series.inv_available %}
+        Peak {{ '{:,}'.format(sales_series.inv_peak) }} on hand in a week over
+        {{ sales_series.n_weeks }} weeks{% if not sku %}, {{ sales_series.n_skus }} products{% endif %}.
+      {%- else %} No weekly stock readings for this filter.{% endif %}
+    {% else %}
+      {{ '{:,}'.format(sales_series.total) }} units over {{ sales_series.n_weeks }} weeks,
+      peak {{ '{:,}'.format(sales_series.peak) }} in a week
+      {%- if not sku %}, {{ sales_series.n_skus }} products{% endif %}
+      {%- if fa_metric == 'both' and not sales_series.inv_available %}. No weekly stock readings loaded{% endif %}
+      {%- if sales_series.total == 0 %}. No recorded sales for this filter{% endif %}.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+
+<form class="inline" id="pie-filter" method="get">
+  <div><label>Mix branch</label>
+    <select name="pie_branch" onchange="this.form.requestSubmit()">
+      <option value="">All branches</option>
+      {% for b in branches %}<option value="{{ b.code }}" {{ 'selected' if pie_branch|lower == b.code|lower }}>{{ b.name }}</option>{% endfor %}
+    </select></div>
+  <div style="min-width:190px"><label>Search product</label>
+    <input name="pie_p1" value="{{ pie_p1 }}" list="sales_skus" placeholder="Show its share of all"
+           autocomplete="off" onchange="this.form.requestSubmit()"></div>
+  <div style="min-width:190px"><label>Compare vs</label>
+    <input name="pie_p2" value="{{ pie_p2 }}" list="sales_skus" placeholder="Add a 2nd product"
+           autocomplete="off" onchange="this.form.requestSubmit()"></div>
+  <div style="min-width:190px"><label>Compare vs</label>
+    <input name="pie_p3" value="{{ pie_p3 }}" list="sales_skus" placeholder="Add a 3rd product"
+           autocomplete="off" onchange="this.form.requestSubmit()"></div>
+  <div style="min-width:0"><button type="submit">Update pies</button></div>
+  <input type="hidden" name="pie_top" id="pie-top-input" value="{{ pie_top }}">
+</form>
+
+<div id="pie-panel">
+<div class="grid2">
+  {{ pie_card(mix_units, 'Sales mix by product', pie_top) }}
+  {{ pie_card(mix_profit, 'Profit mix by product', pie_top) }}
+</div>
+</div>{# /#pie-panel #}
+
+<form class="inline" id="bmix-filter" method="get">
+  <div style="min-width:220px"><label>Branch performance — product</label>
+    <input name="bmix_sku" value="{{ bmix_sku }}" list="sales_skus" placeholder="All products"
+           autocomplete="off" onchange="this.form.requestSubmit()"></div>
+  {% for i, val in [(1, bmix_b1), (2, bmix_b2), (3, bmix_b3)] %}
+  <div><label>{{ 'Compare branch' if i == 1 else 'vs branch' }}</label>
+    <select name="bmix_b{{ i }}" onchange="this.form.requestSubmit()">
+      <option value="">{{ 'All branches' if i == 1 else '—' }}</option>
+      {% for b in branches %}<option value="{{ b.code }}" {{ 'selected' if val|upper == b.code|upper }}>{{ b.name }}</option>{% endfor %}
+    </select></div>
+  {% endfor %}
+  <div style="min-width:0"><button type="submit">Update</button></div>
+</form>
+
+<div id="branch-perf">
+<div class="grid2">
+  {{ pie_card(bmix_units, 'Sales by branch') }}
+  {{ pie_card(bmix_profit, 'Profit by branch') }}
+</div>
+</div>{# /#branch-perf #}
+
+<style>
+  .worst .card-head{margin-bottom:6px}
+  .worst .lead{color:var(--muted);font-size:.9em;margin:0 0 12px}
+  .worst-list{display:flex;flex-direction:column;gap:8px}
+  .worst-row{display:grid;grid-template-columns:minmax(120px,1.4fr) minmax(0,2fr) auto;
+    gap:14px;align-items:center;padding:10px 12px;border:1px solid var(--line);
+    border-radius:10px;background:var(--card,#fff)}
+  .worst-row.no-bars{grid-template-columns:1fr auto}
+  .worst-row.is-dead{border-color:#f2c7c7;background:linear-gradient(90deg,#fdf2f2, #fff 60%)}
+  .worst-row .wname b{display:block;font-size:.95em;line-height:1.25}
+  .wname-link{display:block;width:100%;text-align:left;font:inherit;font-size:.95em;
+    line-height:1.25;font-weight:700;background:none;border:none;padding:0;margin:0;
+    color:var(--ink);cursor:pointer;-webkit-appearance:none;appearance:none;
+    outline:none;box-shadow:none}
+  /* base.html's global "button:hover{background:var(--brand)}" outranks this
+     button's own base "background:none" on :hover (a type selector adds more
+     specificity than a class does), painting the whole full-width control as
+     a solid blue block - explicitly resetting background here, on the same
+     :hover rule, is what actually beats it */
+  .wname-link:hover,.wname-link:focus-visible{color:var(--brand);background:none}
+  .worst-row .wsub{color:var(--muted);font-size:.8em}
+  .worst-bars{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .wbar{display:grid;grid-template-columns:46px 1fr 64px;gap:8px;align-items:center;
+    font-size:.8em;color:var(--muted)}
+  .wbar .track{height:9px;border-radius:5px;background:#eef0f5;overflow:hidden}
+  .wbar .fill{display:block;height:100%;border-radius:5px}
+  .wbar .fill.u{background:#5b8def}
+  .wbar .fill.p{background:#37b98b}
+  .wbar .amt{text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
+  .worst-stock{text-align:right;white-space:nowrap}
+  .worst-stock .oh{font-size:1.15em;font-weight:700;font-variant-numeric:tabular-nums}
+  .worst-stock .oh-l{color:var(--muted);font-size:.75em;margin-left:3px}
+  .worst-stock .cover{display:block;margin-top:3px;font-size:.75em}
+  .worst-stock .cover.hi{color:#c0392b;font-weight:600}
+  .worst-flag{display:inline-block;margin-top:3px;font-size:.68em;font-weight:700;
+    letter-spacing:.04em;text-transform:uppercase;color:#c0392b;
+    background:#fbe4e4;border-radius:4px;padding:1px 6px}
+  @media (max-width:720px){.worst-row{grid-template-columns:1fr}}
+
+  /* [hidden] and this class carry equal specificity, and an author rule wins
+     that tie over the browser's default "[hidden]{display:none}" - writing
+     the visible state as :not([hidden]) ties it to the attribute explicitly,
+     instead of unconditionally showing the overlay regardless of .hidden */
+  .ph-overlay[hidden]{display:none}
+  .ph-overlay:not([hidden]){position:fixed;inset:0;background:rgba(15,23,42,.5);
+    z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+  .ph-modal{background:#fff;border-radius:14px;width:100%;max-width:780px;
+    max-height:88vh;overflow:auto;box-shadow:0 24px 64px rgba(15,23,42,.3)}
+  .ph-modal-head{display:flex;align-items:center;justify-content:space-between;
+    gap:12px;padding:16px 20px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:#fff;border-radius:14px 14px 0 0}
+  .ph-modal-head h3{margin:0;font-size:15px}
+  .ph-modal-close{background:none;border:none;font-size:24px;line-height:1;
+    padding:2px 6px;color:var(--muted);cursor:pointer;border-radius:6px}
+  .ph-modal-close:hover{color:var(--ink);background:var(--line-soft, #eef0f5)}
+  .ph-modal-body{padding:18px 20px}
+  .ph-modal-body .card{border:none;padding:0}
+  .ph-modal-body .card-head{display:none}
+</style>
+
+{% macro worst_card(title, rows, weeks, sub, show_bars=true) %}
+<div class="card worst">
+  <div class="card-head"><h3>{{ title }}
+    {% if weeks %}<span class="mini">last {{ weeks }} weeks</span>{% endif %}</h3></div>
+  {% if not rows %}
+    <p class="muted">Nothing to flag here. This needs a branch stock-on-hand
+      upload (on the Demand forecast tab); a branch with no inventory snapshot
+      shows nothing.</p>
+  {% else %}
+    {% if show_bars %}
+      {% set max_u = (rows | map(attribute='units') | max) or 1 %}
+      {% set max_p = (rows | map(attribute='profit') | max) or 1 %}
+    {% endif %}
+    {% if sub %}<p class="lead">{{ sub }}</p>{% endif %}
+    <div class="worst-list">
+    {% for r in rows %}
+      <div class="worst-row {{ 'is-dead' if r.dead }} {{ '' if show_bars else 'no-bars' }}">
+        <div class="wname">
+          <button type="button" class="wname-link" title="See its sales history"
+                  onclick="showProductHistory(event, '{{ r.sku|e }}')">{{ r.product }}</button>
+          <span class="wsub">{% if r.branch %}{{ r.branch }} &middot; {% endif %}{{ r.sku }}</span>
+        </div>
+        {% if show_bars %}
+        <div class="worst-bars">
+          <div class="wbar"><span>Sold</span>
+            <span class="track"><i class="fill u" style="width:{{ (100 * r.units / max_u)|round(1) }}%"></i></span>
+            <span class="amt">{{ '{:,}'.format(r.units) }} &middot; {{ r.units_pct }}%</span></div>
+          <div class="wbar"><span>Profit</span>
+            <span class="track"><i class="fill p" style="width:{{ (100 * (r.profit if r.profit > 0 else 0) / max_p)|round(1) }}%"></i></span>
+            <span class="amt">{{ '{:,}'.format(r.profit) }} &middot; {{ r.profit_pct }}%</span></div>
+        </div>
+        {% endif %}
+        <div class="worst-stock">
+          <span class="oh">{{ '{:,}'.format(r.on_hand) }}</span><span class="oh-l">on hand</span>
+          <span class="cover {{ 'hi' if (r.cover is none or r.cover >= 26) }}">
+            {%- if r.cover is none %}never sold{% else %}{{ r.cover }} wk of cover{% endif -%}
+          </span>
+          {% if r.dead %}<span class="worst-flag">dead stock</span>{% endif %}
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% if growth.has_data %}
+<div class="card growth-bar-card">
+  <div class="card-head"><h3>Sales growth (week over week)</h3></div>
+  <form class="inline" method="get" style="margin:0 0 10px">
+    <div style="min-width:200px"><label>Branch</label>
+      <select name="growth_bcode" onchange="this.form.requestSubmit()">
+        <option value="">All branches</option>
+        {% for b in branches %}
+          <option value="{{ b.code }}" {{ 'selected' if growth_bcode|upper == b.code|upper }}>{{ b.name }}</option>
+        {% endfor %}
+      </select></div>
+    <div style="min-width:0"><button type="submit">Filter</button></div>
+  </form>
+  <div style="overflow-x:auto">
+  <svg class="growth-bar" viewBox="0 0 {{ growth.sales_growth.svg.w }} {{ growth.sales_growth.svg.h }}"
+       preserveAspectRatio="xMidYMid meet" style="min-width:640px;font:10px system-ui,-apple-system,sans-serif">
+    <line x1="{{ growth.sales_growth.svg.zero_x0 }}" y1="{{ growth.sales_growth.svg.mid_y }}"
+          x2="{{ growth.sales_growth.svg.zero_x1 }}" y2="{{ growth.sales_growth.svg.mid_y }}"
+          stroke="var(--line)" stroke-width="1"/>
+    {% for b in growth.sales_growth.svg.bars %}
+      {% set pt = growth.sales_growth.points[loop.index0] %}
+      <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"
+            fill="{{ '#0f7b3d' if b.pos else '#c0392b' }}" rx="2">
+        <title>{{ pt.label }}: {% if pt.pct is not none %}{{ pt.pct }}%{% else %}no prior week to compare{% endif %}
+          &middot; {{ '{:,}'.format(pt.value) }} units</title>
+      </rect>
+      {% if pt.pct is not none %}
+        <text x="{{ b.cx }}" y="{{ b.value_y }}" text-anchor="middle"
+              fill="{{ '#0f7b3d' if b.pos else '#c0392b' }}" font-weight="600">{{ '%+.0f'|format(pt.pct) }}%</text>
+      {% endif %}
+    {% endfor %}
+    {% for t in growth.sales_growth.svg.xticks %}
+      <text x="{{ t.x }}" y="{{ growth.sales_growth.svg.h - 8 }}" text-anchor="middle" fill="var(--muted)">{{ t.label }}</text>
+    {% endfor %}
+  </svg>
+  </div>
+  <p class="mini muted" style="margin:8px 0 0">% change in units sold vs the prior week
+    ({{ growth.sales_growth.branch_label }}), last {{ growth.n_weeks }} weeks &mdash; green rises,
+    red falls, each bar labelled with its own change and week.</p>
+</div>
+{% endif %}
+
+<form class="inline" id="worst-filter" method="get">
+  <div><label>Worst performing products, branch</label>
+    <select name="worst_branch" onchange="this.form.requestSubmit()">
+      <option value="">All branches</option>
+      {% for b in branches %}<option value="{{ b.code }}"
+        {{ 'selected' if worst_branch|lower == b.code|lower }}>{{ b.name }}</option>{% endfor %}
+    </select></div>
+</form>
+
+<div id="worst-panel">
+{{ worst_card('Worst performing products, overall', worst.overall if worst else [],
+   worst.weeks if worst else 0, '', show_bars=false) }}
+</div>{# /#worst-panel #}
+
+<div id="product-history-modal" class="ph-overlay" hidden>
+  <div class="ph-modal" role="dialog" aria-modal="true" aria-labelledby="ph-modal-title">
+    <div class="ph-modal-head">
+      <h3 id="ph-modal-title">Sales history</h3>
+      <button type="button" class="ph-modal-close" onclick="closeProductHistory()"
+              aria-label="Close">&times;</button>
+    </div>
+    <div id="ph-modal-body" class="ph-modal-body"><p class="mini muted">Loading…</p></div>
+  </div>
+</div>
+
+{% if model_scores %}
+<div class="card">
+  <div class="card-head"><h3>Model comparison, last week held out</h3></div>
+  <form class="inline" id="model-filter" method="post" action="/backorders/analysis/model"
+        style="margin:0 0 14px">
+    <div><label>Model to use (applies to every forecast)</label>
+      <select name="model" onchange="this.form.submit()">
+        <option value="" {{ 'selected' if not forced_model }}>Auto (bias-aware pick)</option>
+        {% for m in model_options %}
+          <option value="{{ m }}" {{ 'selected' if forced_model == m }}>{{ m }}</option>
+        {% endfor %}
+        {% if forced_model and forced_model not in model_options %}
+          <option value="{{ forced_model }}" selected>{{ forced_model }}</option>
+        {% endif %}
+      </select></div>
+    <noscript><div style="min-width:0"><button type="submit">Apply</button></div></noscript>
+  </form>
+  <p class="muted" style="margin:-6px 0 12px;font-size:.9em">The table below scores
+    only the models fitted this run; every trained model stays selectable above.</p>
+  <div class="tbl-wrap"><table class="fit">
+    <thead><tr><th>Model</th><th class="num">WAPE&nbsp;%</th><th class="num">MAE</th>
+      <th class="num">RMSE</th><th class="num">Bias&nbsp;%</th><th class="num">MASE</th></tr></thead>
+    <tbody>
+    {% for s in model_scores %}
+      <tr class="{{ 'fc-act' if s.is_best }}">
+        <td><b>{{ s.method }}</b>{% if s.is_best %} <span class="pill OPEN">in use</span>{% endif %}</td>
+        <td class="num">{{ s.wape }}</td><td class="num">{{ s.mae }}</td>
+        <td class="num">{{ s.rmse }}</td><td class="num">{{ s.bias }}</td>
+        <td class="num">{{ s.mase }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted" style="margin:8px 0 0">Switching recomputes the hold-out and
+    every live forecast, which takes a few seconds.</p>
+
+  {% if ckpt %}
+  <div style="margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line)">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:baseline">
+      <b>Saved models (ES-RNN-ratio network + XGBoost booster)</b>
+      {% if ckpt.exists %}
+        <span class="pill {{ 'NIL' if ckpt.stale else 'CLOSED' }}">{{ 'stale' if ckpt.stale else 'in use' }}</span>
+      {% else %}
+        <span class="pill NIL">none, trains on each restart</span>
+      {% endif %}
+    </div>
+    {% if ckpt.exists %}
+      {% if ckpt.stale %}
+      <p class="muted" style="margin:4px 0 0">New sales files have been uploaded since;
+        retrain to use them.</p>
+      {% endif %}
+    {% else %}
+    <p class="muted" style="margin:4px 0 0">No saved model. The network is trained
+      from scratch on the first request after every restart (~minutes). Train it
+      once to load instantly instead.</p>
+    {% endif %}
+    <form method="post" action="/backorders/analysis/retrain" class="inline" style="margin:8px 0 0">
+      <div style="min-width:0"><button type="submit">Retrain (full, ~10-15 min)</button></div>
+      <div style="min-width:0"><button type="submit" name="quick" value="1" class="ghost">Quick (~2 min)</button></div>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+</div>{# /#sales-panel #}
+
+<script>
+var BRANCH_ID_BY_CODE = { {% for b in branches %}"{{ b.code|upper }}": {{ b.id }}{{ "," if not loop.last }}{% endfor %} };
+(function(){
+  var salesPanel = document.getElementById('sales-panel');
+  if (!salesPanel) return;
+
+  // "Worst performing products": clicking a product opens a popup with its
+  // own sales-trend chart (filtered to that product, and to the branch this
+  // list is currently scoped to, if any) - a peek, not a change to the page's
+  // own sales-trend section behind it, so its filters are restored after.
+  window.showProductHistory = function(e, sku){
+    e.preventDefault();
+    var overlay = document.getElementById('product-history-modal');
+    var body = document.getElementById('ph-modal-body');
+    var title = document.getElementById('ph-modal-title');
+    if (!overlay || !body || !window.fetch || !window.DOMParser) return;
+
+    title.textContent = 'Sales history';
+    body.innerHTML = '<p class="mini muted">Loading…</p>';
+    overlay.hidden = false;
+    document.body.style.overflow = 'hidden';
+
+    var skuInput = document.querySelector('#fa-filter input[name="sku"]');
+    var branchSelect = document.querySelector('#fa-filter select[name="branch_id"]');
+    var prevSku = skuInput ? skuInput.value : '';
+    var prevBranch = branchSelect ? branchSelect.value : '';
+    if (skuInput) skuInput.value = sku;
+    var worstBranchSel = document.querySelector('#worst-filter select[name="worst_branch"]');
+    var code = worstBranchSel && worstBranchSel.value ? worstBranchSel.value.toUpperCase() : '';
+    if (branchSelect && code && BRANCH_ID_BY_CODE[code] !== undefined) {
+      branchSelect.value = BRANCH_ID_BY_CODE[code];
+    }
+    var url = location.pathname + '?' + allParams().toString();
+    if (skuInput) skuInput.value = prevSku;
+    if (branchSelect) branchSelect.value = prevBranch;
+
+    fetch(url, { headers: { 'X-Requested-With': 'fetch' } })
+      .then(function(r){ return r.text(); })
+      .then(function(html){
+        if (overlay.hidden) return;           // closed while loading
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        // just the chart card - #sales-panel wraps the whole lower half of
+        // the page (both pie sections, branch performance, this very worst-
+        // performers list) and pulling all of that into the popup defeats
+        // the point of a focused "just the graph" view
+        var fresh = doc.getElementById('sales-chart-card');
+        var h3 = fresh && fresh.querySelector('.card-head h3');
+        title.textContent = h3 ? h3.textContent : 'Sales history';
+        body.innerHTML = fresh ? fresh.outerHTML
+          : '<p class="mini muted">No sales history for this product.</p>';
+      })
+      .catch(function(){
+        if (!overlay.hidden) body.innerHTML = '<p class="flash error">Could not load sales history.</p>';
+      });
+  };
+
+  window.closeProductHistory = function(){
+    var overlay = document.getElementById('product-history-modal');
+    if (overlay) overlay.hidden = true;
+    document.body.style.overflow = '';
+  };
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') window.closeProductHistory();
+  });
+  document.addEventListener('click', function(e){
+    if (e.target && e.target.id === 'product-history-modal') window.closeProductHistory();
+  });
+
+  // click a line-chart point -> show its week (delegated)
+  document.addEventListener('click', function(e){
+    var hit = e.target.closest && e.target.closest('circle[data-week]');
+    if (!hit) return;
+    var card = hit.closest('.card');
+    var out  = card && card.querySelector('.sales-readout');
+    var unit = hit.getAttribute('data-unit') || 'units';
+    if (out) out.textContent = 'Week of ' + hit.getAttribute('data-week') + ': '
+      + Number(hit.getAttribute('data-value')).toLocaleString() + ' ' + unit;
+    hit.closest('svg').querySelectorAll('circle[data-week][fill]').forEach(function(c){
+      c.setAttribute('r', c === hit ? '5.5' : '3');
+    });
+  });
+
+  if (!window.fetch || !window.DOMParser || !window.URLSearchParams) return;
+
+  // merge every filter form so each fetch carries the full state
+  function allParams(){
+    var p = new URLSearchParams();
+    ['fa-filter', 'bmix-filter', 'pie-filter', 'worst-filter'].forEach(function(id){
+      var f = document.getElementById(id);
+      if (f) new FormData(f).forEach(function(v, k){ p.set(k, v); });
+    });
+    return p;
+  }
+
+  // one request at a time: a newer apply() supersedes any in-flight one, so a
+  // slow earlier response can never land after and flicker the panel back.
+  //
+  // anchorEl (optional): the specific element the user was looking at (e.g.
+  // the link they clicked) when a swapped panel can hold more than one card
+  // stacked inside it (the pie panel holds both the units and the profit
+  // card). Anchoring only the panel's own top edge is not enough there: the
+  // panel's bottom can still move a long way (a card several rows shorter
+  // after "Show less") and drag everything below it - including the next
+  // section, Branch performance - up into wherever the user was scrolled,
+  // which reads as the page having jumped there. Anchoring the specific card
+  // the click happened in (found by its position among '.card's in the same
+  // panel, since the DOM node itself is replaced by the swap) keeps that
+  // exact spot fixed on screen no matter how the rest of the panel resizes.
+  var seq = 0, inflight = null;
+  function apply(ids, anchorEl){
+    var mine = ++seq;
+    if (inflight) { try { inflight.abort(); } catch (e) {} }
+    var ctrl = window.AbortController ? new AbortController() : null;
+    inflight = ctrl;
+    var url = location.pathname + '?' + allParams().toString();
+    var anchorId = null, anchorCardIx = -1, anchorBefore = null;
+    if (anchorEl) {
+      ids.some(function(id){
+        var panel = document.getElementById(id);
+        if (!panel || !panel.contains(anchorEl)) return false;
+        var cards = panel.querySelectorAll('.card');
+        var card = anchorEl.closest('.card');
+        anchorCardIx = Array.prototype.indexOf.call(cards, card);
+        if (anchorCardIx >= 0) {
+          anchorId = id;
+          anchorBefore = cards[anchorCardIx].getBoundingClientRect().top;
+        }
+        return true;
+      });
+    }
+    ids.forEach(function(id){
+      var el = document.getElementById(id);
+      if (el) { el.style.opacity = '.45'; el.style.pointerEvents = 'none'; }
+    });
+    // getBoundingClientRect() immediately after an innerHTML swap is not
+    // reliably settled here - the same read can occasionally still reflect a
+    // pre-layout state, so the scroll compensation below silently computes
+    // against the wrong "after" position. Deferring the measurement past two
+    // animation frames guarantees the browser has actually committed layout
+    // (and paint) for the new content first, the standard fix for this class
+    // of read-after-mutation race.
+    function settled(){
+      return new Promise(function(r){
+        requestAnimationFrame(function(){ requestAnimationFrame(r); });
+      });
+    }
+    fetch(url, { headers: { 'X-Requested-With': 'fetch' },
+                 signal: ctrl && ctrl.signal })
+      .then(function(r){ return r.text(); })
+      .then(function(html){
+        if (mine !== seq) return;              // superseded: drop this response
+        inflight = null;
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var pending = [];                      // [id, beforeTopOrNull]
+        ids.forEach(function(id){
+          var fresh = doc.getElementById(id), cur = document.getElementById(id);
+          if (fresh && cur) {
+            var before = anchorId === id ? anchorBefore : cur.getBoundingClientRect().top;
+            cur.innerHTML = fresh.innerHTML;
+            cur.style.opacity = ''; cur.style.pointerEvents = '';
+            pending.push([id, before]);
+          }
+        });
+        settled().then(function(){
+          if (mine !== seq) return;            // superseded while waiting to settle
+          pending.forEach(function(pair){
+            var id = pair[0], before = pair[1];
+            var cur = document.getElementById(id);
+            if (!cur || before === null) return;
+            if (anchorId === id) {
+              var cardsNow = cur.querySelectorAll('.card');
+              var after = cardsNow[anchorCardIx] && cardsNow[anchorCardIx].getBoundingClientRect().top;
+              if (after !== undefined && after !== before) window.scrollBy(0, after - before);
+            } else {
+              var afterTop = cur.getBoundingClientRect().top;
+              if (afterTop !== before) window.scrollBy(0, afterTop - before);
+            }
+          });
+        });
+        history.replaceState(null, '', url);
+      })
+      .catch(function(err){
+        if (err && err.name === 'AbortError') return;   // expected on supersede
+        if (mine === seq) location.href = url;
+      });
+  }
+
+  // "Show more" / "Show less" on a pie's "Other" slice: widen or narrow how
+  // many products it keeps named before lumping the rest together, then
+  // refresh just the pie panel. The two mirror each other (x3 / ÷3) so
+  // "less" always lands back on a step "more" would have produced.
+  window.expandPieOther = function(e, currentTop){
+    e.preventDefault();
+    var inp = document.getElementById('pie-top-input');
+    if (!inp) return;
+    inp.value = Math.min(currentTop * 3, 500);
+    apply(['pie-panel'], e.target);
+  };
+  window.collapsePieOther = function(e, currentTop){
+    e.preventDefault();
+    var inp = document.getElementById('pie-top-input');
+    if (!inp) return;
+    inp.value = Math.max(8, Math.round(currentTop / 3));
+    apply(['pie-panel'], e.target);
+  };
+
+  // delegated: forms are re-rendered on a #sales-panel swap, so bind on document
+  document.addEventListener('submit', function(e){
+    if (e.target.id === 'fa-filter')    { e.preventDefault(); apply(['sales-panel']); }
+    if (e.target.id === 'bmix-filter')  { e.preventDefault(); apply(['branch-perf']); }
+    if (e.target.id === 'pie-filter')   { e.preventDefault(); apply(['pie-panel']); }
+    if (e.target.id === 'worst-filter') { e.preventDefault(); apply(['worst-panel']); }
+  });
+  var timer;
+  document.addEventListener('input', function(e){
+    var n = e.target.name;
+    var ids = n === 'sku' ? ['sales-panel']
+            : n === 'bmix_sku' ? ['branch-perf']
+            : /^pie_p[123]$/.test(n) ? ['pie-panel'] : null;
+    if (!ids) return;
+    clearTimeout(timer);
+    timer = setTimeout(function(){ apply(ids); }, 450);
+  });
+})();
+</script>
+{% endblock %}

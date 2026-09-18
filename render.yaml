@@ -1,0 +1,34 @@
+# Render Blueprint - https://render.com/docs/blueprint-spec
+#
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo. Render reads
+# this file and creates the service below; env vars marked `sync: false` are
+# left for you to fill in by hand (secrets aren't committed to the repo).
+#
+# Before deploying, create a free MySQL database (e.g. on Aiven - see the
+# README's "Deploying" section) and have its connection string and CA
+# certificate ready.
+services:
+  - type: web
+    runtime: docker
+    name: mineazy-wms
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true          # random signing key, Render fills this in
+      - key: DATABASE_URL
+        sync: false                  # e.g. mysql+pymysql://user:pass@host:port/db
+      - key: DB_SSL_CA
+        value: /etc/secrets/ca.pem   # only used if that secret file exists
+      - key: DEBUG
+        value: "false"
+      # The weekly demand model's neural candidates (torch-based) are the
+      # heaviest and slowest to import - off by default on the free plan's
+      # 512MB RAM. Flip to "true" once on a bigger plan if you want them.
+      - key: WEEKLY_ESRNN
+        value: "false"
+      - key: WEEKLY_NEURALPROPHET
+        value: "false"
+      - key: WEEKLY_LSTM
+        value: "false"

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Reports &amp; Exports — Mineazy{% endblock %}
+{% block heading %}Reports &amp; Exports{% endblock %}
+{% block subheading %}Excel workbooks, CSV extracts for the demand model, and chart packs{% endblock %}
+{% block body %}
+
+<div class="card">
+  <div class="card-head"><h2>Excel workbooks</h2></div>
+  <p style="display:flex;gap:10px;flex-wrap:wrap">
+    <a class="btn" href="/download/backorder-flow">Backorder flow (12 sheets)</a>
+    <a class="btn" href="/download/backorders">Delivery-note fill</a>
+    <a class="btn" href="/download/branch-sales">Branch sales</a>
+    <a class="btn" href="/download/suggested-orders">Suggested orders</a>
+    <a class="btn" href="/download/demand-forecast">Demand forecast (next month)</a>
+    <a class="btn" href="/download/allocation-plan">Allocation plan</a>
+    <a class="btn" href="/download/branch-stats">Branch statistics</a>
+  </p>
+  <h3>CSV (for the demand model)</h3>
+  <p style="display:flex;gap:10px;flex-wrap:wrap">
+    <a class="btn ghost" href="/download/back-orders-csv">Back orders CSV</a>
+    <a class="btn ghost" href="/download/sales-csv">Sales CSV</a>
+  </p>
+  <p class="muted">Feature-engineered training data: <code>python -m wms.scripts.export_training_data</code></p>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Charts (Matplotlib / Seaborn)</h2></div>
+  <form method="post" action="/charts" style="display:inline">
+    <input type="hidden" name="pack" value="dashboard">
+    <button type="submit">Dashboard pack</button>
+  </form>
+  <form method="post" action="/charts" style="display:inline;margin-left:8px">
+    <input type="hidden" name="pack" value="backorder-flow">
+    <button type="submit" class="ghost">Backorder-flow pack</button>
+  </form>
+  {% if request.session.get('charts') %}
+    <div style="margin-top:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
+    {% for name in request.session.get('charts') %}
+      <img src="/output/{{ name }}" alt="{{ name }}" style="width:100%;border:1px solid #e2e8f0;border-radius:6px">
+    {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">No charts generated yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

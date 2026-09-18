@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Inventory — Mineazy{% endblock %}
+{% block heading %}Inventory{% endblock %}
+{% block subheading %}Current stock on hand, by branch{% endblock %}
+{% block body %}
+
+<style>
+  .inv-kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    gap:14px;margin-bottom:18px}
+  .inv-kpi-card{background:var(--card,#fff);border:1px solid var(--line-soft);
+    border-radius:14px;padding:16px 18px;box-shadow:var(--shadow-card)}
+  .inv-kpi-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .inv-kpi-label{font-size:11px;font-weight:700;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--muted)}
+  .inv-kpi-icon{flex:0 0 auto;width:30px;height:30px;border-radius:9px;
+    display:flex;align-items:center;justify-content:center;background:var(--brand-soft)}
+  .inv-kpi-icon svg{width:16px;height:16px;color:var(--brand-ink,var(--brand))}
+  .inv-kpi-icon.warn{background:#fbe4e4}
+  .inv-kpi-icon.warn svg{color:#c0392b}
+  .inv-kpi-value-row{display:flex;align-items:baseline;gap:9px;margin-top:8px}
+  .inv-kpi-value{font-size:30px;font-weight:700;line-height:1;color:var(--ink)}
+  .inv-kpi-delta{font-size:12px;font-weight:700;padding:2px 7px;border-radius:6px}
+  .inv-kpi-delta.up{color:#0f7b3d;background:#e6f4ec}
+  .inv-kpi-delta.down{color:#b23b4a;background:#fbe9ec}
+  .inv-kpi-sub{margin:6px 0 0}
+  .inv-kpi-link{display:inline-block;margin-top:8px;font-size:12.5px;font-weight:600}
+  .status-pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:700}
+  .status-pill.dead{color:#8a5a00;background:#fdf1da}
+</style>
+
+<div class="inv-kpi-row">
+  <div class="inv-kpi-card">
+    <div class="inv-kpi-top">
+      <div class="inv-kpi-label">Low stock alerts <span class="mini muted">(high priority)</span></div>
+      <div class="inv-kpi-icon {{ 'warn' if low_stock.total_alerts }}">{{ m.ic('warn') }}</div>
+    </div>
+    <div class="inv-kpi-value-row">
+      <span class="inv-kpi-value" style="{{ 'color:#c0392b' if low_stock.total_alerts }}">{{ low_stock.total_alerts }}</span>
+    </div>
+    <p class="mini muted inv-kpi-sub">of {{ low_stock.n_high_priority_skus }} high-priority products
+      (top 25% by network sales) below {{ '1.5' }} wk cover at some branch</p>
+    {% if low_stock.rows %}<a href="#low-stock-list" class="inv-kpi-link">View items &rarr;</a>{% endif %}
+  </div>
+
+  <div class="inv-kpi-card">
+    <div class="inv-kpi-top">
+      <div class="inv-kpi-label">Excess stock</div>
+      <div class="inv-kpi-icon">{{ m.ic('box') }}</div>
+    </div>
+    <div class="inv-kpi-value-row">
+      <span class="inv-kpi-value">{{ excess.total_excess }}</span>
+    </div>
+    <p class="mini muted inv-kpi-sub">product line(s) with over {{ '12' }} wks of cover, or no recent sales</p>
+    {% if excess.rows %}<a href="#excess-stock" class="inv-kpi-link">View items &rarr;</a>{% endif %}
+  </div>
+</div>
+
+<div class="card" id="stock-by-product">
+  <div class="card-head"><h2>Stock by product</h2></div>
+  <form class="inline" method="get" action="/inventory">
+    <div style="min-width:220px"><label>Branch</label>
+      <select name="bcode" onchange="this.form.requestSubmit()">
+        <option value="">All branches</option>
+        {% for b in branches %}
+          <option value="{{ b.code }}" {{ 'selected' if bcode|upper == b.code|upper }}>{{ b.name }}</option>
+        {% endfor %}
+      </select></div>
+    <div style="min-width:220px"><label>Search</label>
+      <input type="text" name="q" value="{{ q }}" placeholder="SKU or product name"
+             autocomplete="off"></div>
+    <div style="min-width:0"><button type="submit">Filter</button></div>
+  </form>
+
+  {% if not rows %}
+    <p class="mini muted" style="margin:8px 0 0">
+      {% if bcode or q %}Nothing matches that filter.
+      {% else %}No stock-on-hand data yet — upload a branch snapshot above.{% endif %}
+    </p>
+  {% else %}
+  <div class="tbl-wrap"><table class="fit">
+    <thead><tr><th>Branch</th><th>SKU</th><th>Product</th><th class="num">On hand</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr><td>{{ r.Branch }}</td><td>{{ r.SKU }}</td><td>{{ r.Product }}</td>
+        <td class="num fc-hi">{{ '{:,}'.format(r['On hand']) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+</div>
+
+<div class="card" id="low-stock-list">
+  <div class="card-head"><h2>{{ m.ic('warn') }} Low stock, high-priority products</h2></div>
+  <form class="inline" method="get" action="/inventory">
+    <div style="min-width:220px"><label>Branch</label>
+      <select name="low_bcode" onchange="this.form.requestSubmit()">
+        <option value="">All branches</option>
+        {% for b in branches %}
+          <option value="{{ b.code }}" {{ 'selected' if low_bcode|upper == b.code|upper }}>{{ b.name }}</option>
+        {% endfor %}
+      </select></div>
+    <div style="min-width:0"><button type="submit">Filter</button></div>
+  </form>
+  {% if low_stock.rows %}
+  <div class="tbl-wrap"><table class="fit">
+    <thead><tr><th>Branch</th><th>SKU</th><th>Product</th>
+      <th class="num">On hand</th><th class="num">Weekly demand</th><th class="num">Cover</th></tr></thead>
+    <tbody>
+    {% for r in low_stock.rows %}
+      <tr><td>{{ r.branch }}</td><td>{{ r.sku }}</td><td>{{ r.product }}</td>
+        <td class="num">{{ '{:,}'.format(r.on_hand) }}</td>
+        <td class="num">{{ r.weekly_demand }}</td>
+        <td class="num" style="color:#c0392b;font-weight:600">{{ r.cover_weeks }} wk</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+    <p class="mini muted" style="margin:8px 0 0">No low-stock alerts{% if low_bcode %} for this branch{% endif %}.</p>
+  {% endif %}
+</div>
+
+<div class="card" id="excess-stock">
+  <div class="card-head"><h2>{{ m.ic('box') }} Excess / slow-moving stock</h2></div>
+  <p class="mini muted" style="margin:-6px 0 14px">
+    Product lines holding more than {{ '12' }} weeks of cover at their own sales pace, or sitting
+    on stock with no sales at all in the forecast history - capital tied up on a shelf, worth
+    reviewing for a markdown, transfer or write-off.
+  </p>
+  <form class="inline" method="get" action="/inventory">
+    <div style="min-width:220px"><label>Branch</label>
+      <select name="excess_bcode" onchange="this.form.requestSubmit()">
+        <option value="">All branches</option>
+        {% for b in branches %}
+          <option value="{{ b.code }}" {{ 'selected' if excess_bcode|upper == b.code|upper }}>{{ b.name }}</option>
+        {% endfor %}
+      </select></div>
+    <div style="min-width:0"><button type="submit">Filter</button></div>
+  </form>
+  {% if excess.rows %}
+  <div class="tbl-wrap"><table class="fit">
+    <thead><tr><th>Branch</th><th>SKU</th><th>Product</th>
+      <th class="num">On hand</th><th class="num">Weekly demand</th>
+      <th class="num">Cover</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for r in excess.rows %}
+      <tr><td>{{ r.branch }}</td><td>{{ r.sku }}</td><td>{{ r.product }}</td>
+        <td class="num">{{ '{:,}'.format(r.on_hand) }}</td>
+        <td class="num">{{ r.weekly_demand }}</td>
+        <td class="num">{{ (r.cover_weeks ~ ' wk') if r.cover_weeks is not none else 'no sales' }}</td>
+        <td>{% if r.dead %}<span class="status-pill dead">No sales</span>
+            {% else %}<span class="status-pill dead">Excess</span>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+    <p class="mini muted" style="margin:8px 0 0">No excess stock{% if excess_bcode %} for this branch{% endif %} found.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>{{ m.ic('box') }} Stock on hand</h2></div>
+
+  {% if can(user.role, 'backorder.enter') %}
+  <div class="uploads" style="margin-bottom:18px">
+    <form class="upload" method="post" action="/analytics/upload" enctype="multipart/form-data">
+      <input type="hidden" name="kind" value="inventory">
+      <h4>Branch inventory <span class="sub">replaces the branch's stock-on-hand snapshot</span></h4>
+      <select name="branch_code" required aria-label="Branch">
+        <option value="">Which branch…</option>
+        {% for b in branches %}<option value="{{ b.code }}">{{ b.code }} — {{ b.name }}</option>{% endfor %}
+      </select>
+      <label class="drop">
+        {{ m.ic('upload') }}
+        <span class="name" data-placeholder="Choose an .xlsx or .csv">Choose an .xlsx or .csv</span>
+        <input type="file" name="file" accept=".xlsx,.xls,.csv" required onchange="upName(this)">
+      </label>
+      <button type="submit">Update inventory</button>
+    </form>
+  </div>
+  <script>
+  function upName(inp){
+    var d = inp.closest('.drop'), s = d.querySelector('.name');
+    if (inp.files && inp.files.length){ s.textContent = inp.files[0].name; d.classList.add('has'); }
+    else { s.textContent = s.dataset.placeholder; d.classList.remove('has'); }
+  }
+  </script>
+  {% endif %}
+</div>
+
+{% endblock %}

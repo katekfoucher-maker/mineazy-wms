@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Recon — Mineazy{% endblock %}
+{% block heading %}Recon{% endblock %}
+{% block subheading %}Products leaving the warehouse for a branch{% endblock %}
+{% block body %}
+
+<div class="card" id="upload">
+  <div class="card-head"><h2>{{ m.ic('upload') }} Import from document</h2></div>
+  <form method="post" action="/recon/new/upload" enctype="multipart/form-data" class="inline">
+    <div style="min-width:320px">
+      <label>Photo/scan, PDF, CSV or Excel of the dispatch document</label>
+      <input type="file" name="files" multiple
+             accept=".pdf,.csv,.tsv,.txt,.xlsx,.xlsm,.xls,.jpg,.jpeg,.png,.bmp,.tif,.tiff,.webp"
+             required>
+      <p class="filedrop-hint">or drag and drop the file(s) here - select or drop
+        all the pages/photos of a multi-page document together</p>
+    </div>
+    <button type="submit">{{ m.ic('upload') }} Parse &amp; fill</button>
+  </form>
+</div>
+
+{% if prefill and prefill.warnings %}
+  <div class="flash info">{{ prefill.warnings|join(' ') }}</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h2>Dispatch details</h2></div>
+  <form method="post" action="/recon/new" id="doform">
+    <div class="inline">
+      <div><label>Reference</label>
+        <input name="do_no" value="{{ prefill.do_no or '' }}"
+               placeholder="e.g. DO-000123 (auto if blank)"></div>
+      <div><label>Branch</label>
+        <select name="branch_id" required>
+          <option value="">Select…</option>
+          {% for b in branches %}
+            <option value="{{ b.id }}"
+              {{ 'selected' if prefill and prefill.branch_id == b.id }}>{{ b.code }} — {{ b.name }}</option>
+          {% endfor %}
+        </select></div>
+      <div><label>Date</label>
+        <input type="date" name="doc_date" value="{{ prefill.doc_date or today }}"></div>
+    </div>
+    <div><label>Notes</label>
+      <input name="notes" style="width:100%" value="{{ prefill.notes if prefill and prefill.notes else '' }}"></div>
+
+    <h3>Line items</h3>
+    <div class="scroll"><table id="lines">
+      <thead><tr>
+        <th style="min-width:180px">Product</th><th>Description</th>
+        <th style="width:120px">Dispatched</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% set rows = (prefill.lines if prefill and prefill.lines else [{'sku':'','description':'','dispatched_qty':''}]) %}
+        {% for r in rows %}
+        <tr>
+          <td><input name="sku" list="skus" value="{{ r.sku }}" required></td>
+          <td><input name="description" value="{{ r.description }}" placeholder="auto" readonly
+                     style="background:#f8f9fc;border-style:dashed"></td>
+          <td><input name="dispatched_qty" type="number" min="1" value="{{ r.dispatched_qty }}" required></td>
+          <td><button type="button" class="ghost" onclick="this.closest('tr').remove();recalc()">✕</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot><tr>
+        <th style="text-align:right">Total dispatched</th>
+        <th><output id="do-total">0</output></th><th></th>
+      </tr></tfoot>
+    </table></div>
+    <datalist id="skus">
+      {% for p in products %}<option value="{{ p.sku }}">{{ p.name }}</option>{% endfor %}
+    </datalist>
+    <p><button type="button" class="ghost" onclick="addRow()">{{ m.ic('plus') }} Add line</button></p>
+
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0 12px">
+      <input type="checkbox" id="confirm" style="width:auto" required>
+      I have reviewed the quantities above — dispatched units will be moved
+      from the warehouse onto the branch's stock on hand. A line is
+      automatically capped if the warehouse doesn't have that much on hand.
+    </label>
+    <button type="submit">Confirm dispatch</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>Recon records</h2></div>
+  <div class="scroll"><table class="fit">
+    <thead><tr>
+      <th>Reference</th><th>Branch</th><th>Date</th>
+      <th class="num">Lines</th><th class="num">Dispatched</th><th style="width:70px"></th>
+    </tr></thead>
+    <tbody>
+    {% for d in dispatches %}
+      <tr>
+        <td><strong>{{ d.do_no }}</strong></td>
+        <td>{{ d.branch }}</td>
+        <td>{{ d.doc_date }}</td>
+        <td class="num">{{ d.lines }}</td>
+        <td class="num">{{ '{:,}'.format(d.dispatched) }}</td>
+        <td>
+          <form method="post" action="/recon/{{ d.do_no }}/delete"
+                onsubmit="return confirm('Reverse dispatch order {{ d.do_no }}?\n\nThis returns its dispatched units from the branch back to the warehouse and deletes the record.')">
+            <button type="submit" class="danger" title="Reverse this dispatch order">✕</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="empty">No dispatches recorded yet</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+<script>
+function recalc(){
+  var total = 0;
+  document.querySelectorAll('#lines tbody tr').forEach(function(tr){
+    total += parseInt(tr.querySelector('[name=dispatched_qty]').value) || 0;
+  });
+  document.getElementById('do-total').textContent = total;
+}
+document.querySelectorAll('#lines [name=dispatched_qty]').forEach(function(i){
+  i.addEventListener('input', recalc);
+});
+function addRow(){
+  var b = document.querySelector('#lines tbody');
+  var tr = b.rows[0].cloneNode(true);
+  tr.querySelectorAll('input').forEach(function(i){ i.value=''; });
+  tr.querySelector('[name=dispatched_qty]').addEventListener('input', recalc);
+  b.appendChild(tr);
+  recalc();
+}
+document.getElementById('doform').addEventListener('submit', function(e){
+  var ref = document.querySelector('[name=do_no]').value.trim() || '(auto)';
+  var total = document.getElementById('do-total').textContent;
+  var lines = document.querySelectorAll('#lines tbody tr').length;
+  if(!confirm('Confirm dispatch order ' + ref + '?\n\n'
+              + lines + ' line(s) · ' + total + ' unit(s) dispatched')){
+    e.preventDefault();
+  }
+});
+recalc();
+</script>
+{% endblock %}

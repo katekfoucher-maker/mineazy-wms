@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ doc.bo_no }} — Mineazy{% endblock %}
+{% block heading %}
+  {{ doc.bo_no }}
+  <span class="pill {{ doc.stage }}">{{ stage_label[BOStage(doc.stage)] }}</span>
+  <span class="pill {{ doc.status }}">{{ doc.status }}</span>{% endblock %}
+{% block subheading %}{{ doc.branch }}
+  {%- if doc.period_label %} · {{ doc.period_label }}{% endif %}
+  · cycle {{ cycle_label.get(doc.cycle, doc.cycle) }} · source {{ doc.source }}
+  {%- if doc.source_refs %} · dispatch notes:
+    {% for ref in doc.source_refs %}<a href="/delivery-notes/{{ ref }}">{{ ref }}</a>{{ ", " if not loop.last }}{% endfor %}
+  {%- endif %}
+  {%- if doc.expected_date %} · expected {{ doc.expected_date }}{% endif %}{% endblock %}
+{% block actions %}<a class="btn ghost" href="/backorders">← Active back orders</a>{% endblock %}
+{% block body %}
+{% if doc.notes %}<p>{{ doc.notes }}</p>{% endif %}
+
+<div class="card">
+  <h3>Products — requested vs sent</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>Product</th><th>Description</th>
+      <th>Requested</th><th>Sent</th><th>Back order</th>
+      <th>Allocated</th><th>Fulfilled</th></tr></thead>
+    <tbody>
+    {% for i in doc['items'] %}
+      {% set rs = req_sent.get(i.product_id) %}
+      <tr>
+        <td>{{ i.sku }}</td><td>{{ i.description }}</td>
+        <td>{{ rs.requested if rs else '—' }}</td>
+        <td>{{ rs.sent if rs else '—' }}</td>
+        <td><strong class="bad">{{ i.qty_ordered }}</strong></td>
+        <td>{{ i.qty_allocated }}</td><td>{{ i.qty_fulfilled }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr>
+      <th colspan="4" style="text-align:right">Totals</th>
+      <th class="bad">{{ doc.qty_ordered }}</th>
+      <th>{{ doc['items']|sum(attribute='qty_allocated') }}</th>
+      <th>{{ doc.qty_fulfilled }}</th>
+    </tr></tfoot>
+  </table></div>
+  <p class="muted">Back order = requested − sent. Fulfilment
+     {{ (doc.fulfil_pct*100)|round(0)|int }}% ({{ doc.qty_fulfilled }}/{{ doc.qty_ordered }})
+     · outstanding value {{ doc.value_outstanding }}</p>
+</div>
+
+{% if allowed and can(user.role,'backorder.manage') %}
+<div class="card">
+  <h3>Close back order</h3>
+  <p class="muted" style="margin:0 0 10px">While this back order is open, every new dispatch
+    for {{ doc.branch }} loads onto it. Close it to stop that.</p>
+  <form method="post" action="/backorders/{{ doc.bo_no }}/advance">
+    <div class="inline">
+      <div><label>Move to</label>
+        <select name="to_stage">
+          {% for val, lbl in allowed %}<option value="{{ val }}">{{ lbl }}</option>{% endfor %}
+        </select></div>
+      <div style="flex:1"><label>Note</label><input name="note" style="width:100%"></div>
+    </div>
+    <button type="submit" style="margin-top:10px">Apply</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}
