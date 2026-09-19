@@ -8,9 +8,12 @@ from wms.analytics import weekly_forecast as wf
 
 
 @pytest.fixture(autouse=True)
-def _isolate_model_choice(tmp_path_factory, monkeypatch):
+def _isolate_model_choice(tmp_path_factory, monkeypatch, seeded):
     """Ignore any runtime-pinned model file / saved network so these tests use
-    the config default and train fresh (fast / deterministic)."""
+    the config default and train fresh (fast / deterministic). ``seeded``
+    ensures the WeeklySalesLine / WeeklyStockSnapshotLine tables exist for the
+    "no files here -> read the database" fallback these loaders now have,
+    regardless of what other test files have or haven't run yet."""
     d = tmp_path_factory.mktemp("mc")
     monkeypatch.setattr(wf, "_model_choice_path", lambda: d / "weekly_model.txt")
     monkeypatch.setattr(wf, "_ratio_ckpt_path", lambda: d / "esrnn_ratio.pt")
@@ -27,6 +30,42 @@ def _isolate_model_choice(tmp_path_factory, monkeypatch):
     wf._CACHE.clear()
     wf._CKPT_CACHE.clear()
     wf._BW_CACHE.clear()
+    _clear_weekly_db_tables()
+    yield
+    _clear_weekly_db_tables()
+
+
+def _clear_weekly_db_tables():
+    """Keep WeeklySalesLine / WeeklyStockSnapshotLine empty around each test -
+    most tests here isolate via an explicit ``directory=``/monkeypatched
+    folder and never touch these tables, but the handful that exercise the
+    upload routes (which write straight into them now) shouldn't leak into
+    each other or into the "no files -> read the DB" fallback tests."""
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine, WeeklyStockSnapshotLine
+    db = SessionLocal()
+    try:
+        db.query(WeeklySalesLine).delete()
+        db.query(WeeklyStockSnapshotLine).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _real_weeks(branch_code: str | None = None):
+    """[(branch_code, week_start date), ...] for every REAL (non-simulated)
+    WeeklySalesLine row - what the upload route writes now instead of a file."""
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine
+    db = SessionLocal()
+    try:
+        q = db.query(WeeklySalesLine.branch_code, WeeklySalesLine.week_start).filter(
+            WeeklySalesLine.is_simulated.is_(False))
+        if branch_code:
+            q = q.filter(WeeklySalesLine.branch_code == branch_code)
+        return sorted(set(q.all()))
+    finally:
+        db.close()
 
 
 def _week_file(path, rows):
@@ -716,8 +755,9 @@ def test_upload_weekly_route(tmp_path, monkeypatch, seeded):
     r = c.post("/analytics/upload-weekly", files=files, follow_redirects=False)
     assert r.status_code == 303
 
-    saved = sorted(p.name for p in tmp_path.iterdir())
-    assert saved == ["BM 2026-08-02 week.xlsx", "GWA 2026-08-02 week.xlsx"]
+    saved = _real_weeks()
+    assert saved == [("BM", pd.Timestamp("2026-08-02").date()),
+                     ("GWA", pd.Timestamp("2026-08-02").date())]
     wr.weekly_fc._CACHE.clear()
 
 
@@ -755,9 +795,10 @@ def test_upload_weekly_route_branch_override(tmp_path, monkeypatch, seeded):
                files=files, follow_redirects=False)
     assert r.status_code == 303
 
-    saved = sorted(p.name for p in tmp_path.iterdir())
+    saved = _real_weeks()
     # both dated files land on GWA; the one with no date in the name is skipped
-    assert saved == ["GWA 2026-08-02 week.xlsx", "GWA 2026-08-09 week.xlsx"]
+    assert saved == [("GWA", pd.Timestamp("2026-08-02").date()),
+                     ("GWA", pd.Timestamp("2026-08-09").date())]
     wr.weekly_fc._CACHE.clear()
 
 

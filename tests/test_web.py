@@ -538,14 +538,16 @@ def test_inventory_upload_feeds_the_weekly_plan(web, db, tmp_path, monkeypatch):
     xl = io.BytesIO()
     pd.DataFrame({"Item No": bm.sku, "Qty": [1] * len(bm)}).to_excel(xl, index=False)
     xl.seek(0)
-    dest = inv_mod.inventory_dir() / "BM.xlsx"
     try:
         up = web.post("/analytics/upload",
                       data={"kind": "inventory", "branch_code": "BM"},
                       files={"file": ("BM.xlsx", xl,
                              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
                       follow_redirects=True)
-        assert up.status_code == 200 and dest.exists()
+        # the upload writes straight into StockOnHand now (see inv_mod.parse_upload
+        # in wms/web/routes.py) - it no longer saves the file to disk, so the DB
+        # assertions below are the real check.
+        assert up.status_code == 200
 
         wk = allocation.weekly_allocation_plan(db, branch_code="belmont")
         assert not wk.empty

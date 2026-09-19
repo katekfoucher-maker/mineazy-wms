@@ -1374,27 +1374,17 @@ def analytics_upload(request: Request, kind: str = Form(...),
                      db: Session = Depends(db_session),
                      user: User = Depends(require_perm("backorder.enter"))):
     """Accept a monthly sales export or a branch stock-on-hand snapshot."""
-    import shutil
     name = (file.filename or "").strip()
-    ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ".xlsx"
     try:
         if kind == "inventory":
             bc = branch_code.strip().upper()
             if not bc:
                 raise ValueError("Pick the branch this inventory file is for.")
-            d = inv_mod.inventory_dir()
-            d.mkdir(parents=True, exist_ok=True)
-            for old in d.glob(f"{bc}.*"):            # one snapshot per branch
-                old.unlink()
-            dest = d / f"{bc}{ext if ext in ('.xlsx', '.xls', '.csv') else '.xlsx'}"
-            with dest.open("wb") as fh:
-                shutil.copyfileobj(file.file, fh)
-            inv = inv_mod.load_inventory()
-            bslice = inv[inv["branch_code"] == bc] if not inv.empty else inv
-            rows = int(len(bslice))
             br = db.query(Branch).filter(Branch.code == bc).first()
             if br is None:
                 raise ValueError(f"Unknown branch code '{bc}'.")
+            bslice = inv_mod.parse_upload(file.file.read(), name, bc)
+            rows = int(len(bslice))
             # the upload REPLACES this branch's stock-on-hand balance
             stock_svc.set_branch_stock(
                 db, branch_id=br.id,
@@ -1411,27 +1401,19 @@ def analytics_upload(request: Request, kind: str = Form(...),
             month, _ = monthly_sales._parse_name(name)
             if not month:
                 raise ValueError("Name the file with its month, e.g. 'AUGUST SALES.xlsx'.")
-            se = ext if ext in (".xlsx", ".xls", ".csv") else ".xlsx"
-            mon = max((k for k, v in monthly_sales._MONTHS.items() if v == month), key=len)
-            d = monthly_sales.history_dir()
-            d.mkdir(parents=True, exist_ok=True)
-            for old in d.glob(f"* {bc} SALES.*"):        # one file per branch-month
-                if monthly_sales._parse_name(old.name)[0] == month:
-                    old.unlink()
-            # carry an explicit day range (a mid-month, not-yet-complete export)
-            # over into the saved name - the day range lives in the filename, so
-            # losing it here would silently make a partial month look complete
-            day_range = monthly_sales._parse_day_range(name)
-            prefix = f"{day_range[0]} TO {day_range[1]} " if day_range else ""
-            dest = d / f"{prefix}{mon} {bc} SALES{se}"
-            with dest.open("wb") as fh:
-                shutil.copyfileobj(file.file, fh)
+            rows = monthly_sales.parse_upload(file.file.read(), name, branch_code=bc)
+            if rows.empty:
+                raise ValueError("Could not read any product rows from that file.")
+            period = rows["period"].iloc[0]
+            day_from, day_to = int(rows["day_from"].iloc[0]), int(rows["day_to"].iloc[0])
+            n_saved = monthly_sales.save_month(bc, period, rows)
             demand_forecast._CACHE.clear()
             panel = monthly_sales.load_panel()
             sim = weekly_simulate.regenerate()
-            period_lbl = (f"{mon.title()} {day_range[0]}-{day_range[1]}" if day_range
-                         else mon.title())
-            msg = (f"Sales for {bc} {period_lbl} added, history now "
+            mon_title = period.strftime("%B")
+            partial = (day_from, day_to) != (1, int(period.day))
+            period_lbl = f"{mon_title} {day_from}-{day_to}" if partial else mon_title
+            msg = (f"Sales for {bc} {period_lbl} added ({n_saved} line(s)), history now "
                   f"{monthly_sales.coverage(panel).get('month_range', '')}.")
             if bc in sim["branches"]:
                 msg += (f" Weekly forecast now also fills the gap with "
@@ -1459,9 +1441,6 @@ def analytics_upload_weekly(request: Request,
     read from the name too, unless a ``branch_code`` is picked in the form, which
     then applies to every file in the upload. Newest upload for a given
     branch-week replaces the old one."""
-    import shutil
-    d = weekly_fc.weekly_dir()
-    d.mkdir(parents=True, exist_ok=True)
     picked = (branch_code or "").strip().upper()
     valid = {b.code.upper() for b in db.query(Branch).all()}
     if picked and picked not in valid:
@@ -1472,23 +1451,16 @@ def analytics_upload_weekly(request: Request,
         if not name:
             continue
         ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ".xlsx"
-        if ext not in (".xlsx", ".xls", ".csv"):
+        if ext not in (".xlsx", ".xls"):
             skipped.append(f"{name} (not a spreadsheet)")
             continue
-        code, ws = weekly_fc.parse_name(name)
-        if picked:
-            code = picked
-        if not code or ws is None:
-            skipped.append(f"{name} (no {'week date' if picked else 'branch/week'} in name)")
+        parsed = weekly_fc.parse_upload_sales(f.file.read(), name, branch_code=picked or None)
+        if not parsed:
+            skipped.append(f"{name} (no {'week date' if picked else 'branch/week'} in name, "
+                           "or unreadable)")
             continue
-        tag = ws.date().isoformat()
-        for old in d.glob(f"*{ext}"):               # one file per branch-week
-            oc, ow = weekly_fc.parse_name(old.name)
-            if oc == code and ow is not None and ow.date().isoformat() == tag:
-                old.unlink()
-        dest = d / f"{code} {tag} week{ext}"
-        with dest.open("wb") as fh:
-            shutil.copyfileobj(f.file, fh)
+        code, ws, rows = parsed
+        weekly_fc.save_week(code, ws, rows)
         saved += 1
     # real weekly data always wins - drop any simulated week(s) it now covers
     weekly_simulate.regenerate()
@@ -1497,6 +1469,46 @@ def analytics_upload_weekly(request: Request,
         flash(request, f"{saved} weekly file(s) loaded, model now covers "
                        f"{', '.join(cov.get('branches', []))} over {cov.get('weeks', 0)} "
                        f"weeks ({cov.get('week_range', '')}).", "success")
+    if skipped:
+        flash(request, "Skipped: " + "; ".join(skipped[:6])
+              + (" …" if len(skipped) > 6 else ""), "error")
+    if not saved and not skipped:
+        flash(request, "No files received.", "error")
+    return RedirectResponse("/analytics?tab=demand", 303)
+
+
+@router.post("/analytics/upload-weekly-inventory")
+def analytics_upload_weekly_inventory(request: Request,
+                                      files: list[UploadFile] = File(...),
+                                      branch_code: str = Form(""),
+                                      db: Session = Depends(db_session),
+                                      user: User = Depends(require_perm("backorder.enter"))):
+    """Accept weekly Hansa stock-on-hand exports (one per branch-week) - used
+    to spot stockout weeks in the weekly demand model. Same naming/branch-pick
+    rules as the weekly sales upload above."""
+    picked = (branch_code or "").strip().upper()
+    valid = {b.code.upper() for b in db.query(Branch).all()}
+    if picked and picked not in valid:
+        picked = ""
+    saved, skipped = 0, []
+    for f in files or []:
+        name = (f.filename or "").strip()
+        if not name:
+            continue
+        ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ".xlsx"
+        if ext not in (".xlsx", ".xls"):
+            skipped.append(f"{name} (not a spreadsheet)")
+            continue
+        parsed = weekly_fc.parse_upload_inventory(f.file.read(), name, branch_code=picked or None)
+        if not parsed:
+            skipped.append(f"{name} (no {'week date' if picked else 'branch/week'} in name, "
+                           "or no quantity column found)")
+            continue
+        code, ws, rows = parsed
+        weekly_fc.save_inventory_week(code, ws, rows)
+        saved += 1
+    if saved:
+        flash(request, f"{saved} weekly stock file(s) loaded.", "success")
     if skipped:
         flash(request, "Skipped: " + "; ".join(skipped[:6])
               + (" …" if len(skipped) > 6 else ""), "error")

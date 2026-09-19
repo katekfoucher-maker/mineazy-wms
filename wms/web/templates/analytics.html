@@ -22,6 +22,19 @@
         </label>
         <button type="submit">Load weekly files</button>
       </form>
+      <form class="upload" method="post" action="/analytics/upload-weekly-inventory" enctype="multipart/form-data">
+        <h4>Weekly stock <span class="sub">spots stockout weeks for the forecast</span></h4>
+        <select name="branch_code" aria-label="Branch">
+          <option value="">Which Branch</option>
+          {% for b in branches %}<option value="{{ b.code }}">{{ b.code }} — {{ b.name }}</option>{% endfor %}
+        </select>
+        <label class="drop">
+          {{ m.ic('upload') }}
+          <span class="name" data-placeholder="Choose weekly stock .xlsx files (multiple)">Choose weekly stock .xlsx files (multiple)</span>
+          <input type="file" name="files" accept=".xlsx,.xls" multiple required onchange="upName(this)">
+        </label>
+        <button type="submit">Load weekly stock files</button>
+      </form>
     </div>
   </div>
   <script>

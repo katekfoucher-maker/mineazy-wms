@@ -131,20 +131,7 @@ def _items(path: str) -> pd.DataFrame:
     return raw[["sku", "item", "qty", "profit", "revenue"]]
 
 
-def load_panel(directory=None) -> dict:
-    d = Path(directory) if directory else weekly_dir()
-    files = [f for f in sorted(glob.glob(str(d / "**" / "*.xls*"), recursive=True))
-             if not os.path.basename(f).startswith("~$")]
-    frames, provs = [], []
-    for f in files:
-        code, ws = parse_name(f)
-        if not code or ws is None:
-            continue
-        it = _items(f)
-        it["branch"] = code
-        it["week_start"] = ws
-        frames.append(it)
-        provs.append({"file": os.path.basename(f), "branch": code, "week_start": ws})
+def _reshape(frames: list, provs: list) -> dict:
     empty = {"MAT": np.zeros((0, 0), np.float32),
              "PROFIT": np.zeros((0, 0), np.float32),
              "REV": np.zeros((0, 0), np.float32),
@@ -152,6 +139,7 @@ def load_panel(directory=None) -> dict:
     if not frames:
         return empty
     long = pd.concat(frames, ignore_index=True)
+    long["week_start"] = pd.to_datetime(long["week_start"])
     anchor = long["week_start"].min()
     long["wi"] = ((long["week_start"] - anchor).dt.days / 7).round().astype(int)
     long = (long.groupby(["branch", "sku", "wi"], as_index=False)
@@ -173,6 +161,161 @@ def load_panel(directory=None) -> dict:
     return {"MAT": MAT, "PROFIT": PROFIT, "REV": REV, "keys": keys, "weeks": weeks,
             "item_of": long.groupby(["branch", "sku"])["item"].first().to_dict(),
             "prov": pd.DataFrame(provs)}
+
+
+def parse_upload_sales(raw: bytes, filename: str, branch_code: str | None = None):
+    """Parse one uploaded weekly-sales file's bytes, the same way a file on
+    disk would be (see ``_items``) - used by the upload route to write
+    straight into WeeklySalesLine instead of saving the file. The week always
+    comes from the filename; the branch does too UNLESS ``branch_code`` is
+    given explicitly (the upload form may have one picked, applying to every
+    file in a multi-file upload).
+
+    Returns ``(branch_code, week_start, rows_df[sku,item,qty,profit,revenue])``
+    or ``None`` if the filename doesn't carry a recognised branch + week."""
+    import io
+    code, ws = parse_name(filename)
+    if branch_code:
+        code = branch_code.strip().upper()
+    if not code or ws is None:
+        return None
+    try:
+        raw_x = pd.read_excel(io.BytesIO(raw), sheet_name="Item Statistics",
+                              header=0, dtype=str)
+    except ValueError:
+        raw_x = pd.read_excel(io.BytesIO(raw), header=0, dtype=str)
+    orig3 = list(raw_x.columns[:3])
+    by_name = {str(c).strip().lower(): c for c in raw_x.columns}
+    raw_x = raw_x.rename(columns={raw_x.columns[0]: "sku", raw_x.columns[1]: "item",
+                                  raw_x.columns[2]: "qty"})
+    raw_x = raw_x[raw_x["sku"].notna()].copy()
+    raw_x["sku"] = raw_x["sku"].astype(str).str.strip()
+    raw_x["item"] = raw_x["item"].astype(str).str.strip()
+    raw_x = raw_x[raw_x["sku"].str.len() > 0]
+    raw_x = raw_x[~(raw_x["item"].str.contains(_EXCLUDE_RX, na=False)
+                    | raw_x["sku"].str.upper().isin(_EXCLUDE_SKUS))]
+    raw_x["qty"] = pd.to_numeric(raw_x["qty"], errors="coerce").fillna(0.0).clip(lower=0)
+    for out_col, header in (("profit", "profit"), ("revenue", "turnover")):
+        src = by_name.get(header)
+        raw_x[out_col] = (pd.to_numeric(raw_x[src], errors="coerce").fillna(0.0)
+                          if src is not None and src not in orig3 else 0.0)
+    return code, ws, raw_x[["sku", "item", "qty", "profit", "revenue"]]
+
+
+def save_week(branch_code: str, week_start, rows: pd.DataFrame) -> int:
+    """Replace one (branch, week)'s REAL rows in WeeklySalesLine (never
+    touches simulated ones - weekly_simulate.regenerate() cleans those up
+    wholesale right after a real upload, once it can see the new coverage).
+    Returns the number of line rows saved."""
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine
+
+    week_date = pd.Timestamp(week_start).date()
+    db = SessionLocal()
+    try:
+        db.query(WeeklySalesLine).filter(
+            WeeklySalesLine.branch_code == branch_code,
+            WeeklySalesLine.week_start == week_date,
+            WeeklySalesLine.is_simulated.is_(False)).delete()
+        n = 0
+        for r in rows.itertuples():
+            db.add(WeeklySalesLine(
+                branch_code=branch_code, sku=r.sku, item=r.item, week_start=week_date,
+                qty=float(r.qty), profit=float(r.profit), revenue=float(r.revenue),
+                is_simulated=False))
+            n += 1
+        db.commit()
+        return n
+    finally:
+        db.close()
+
+
+def clear_simulated_weeks() -> int:
+    """Delete every simulated WeeklySalesLine row. Returns how many were
+    removed. Mirrors weekly_simulate.py's old clear() (which deleted every
+    file in its simulated sub-folder) - called once before regenerate()
+    rebuilds the simulated set from scratch."""
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine
+
+    db = SessionLocal()
+    try:
+        n = db.query(WeeklySalesLine).filter(
+            WeeklySalesLine.is_simulated.is_(True)).delete()
+        db.commit()
+        return n
+    finally:
+        db.close()
+
+
+def save_simulated_week(branch_code: str, week_start, rows: pd.DataFrame) -> int:
+    """Insert one (branch, week)'s SIMULATED rows into WeeklySalesLine. Call
+    clear_simulated_weeks() once before a batch of these, not per-call - the
+    simulated set is always rebuilt wholesale, not incrementally."""
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine
+
+    week_date = pd.Timestamp(week_start).date()
+    db = SessionLocal()
+    try:
+        n = 0
+        for r in rows.itertuples():
+            db.add(WeeklySalesLine(
+                branch_code=branch_code, sku=r.sku, item=r.item, week_start=week_date,
+                qty=float(r.qty), profit=float(r.profit), revenue=float(r.revenue),
+                is_simulated=True))
+            n += 1
+        db.commit()
+        return n
+    finally:
+        db.close()
+
+
+def _load_panel_from_db() -> dict:
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine
+
+    db = SessionLocal()
+    try:
+        rows = db.query(WeeklySalesLine).all()
+    finally:
+        db.close()
+    if not rows:
+        return _reshape([], [])
+    long = pd.DataFrame([{
+        "branch": r.branch_code, "sku": r.sku, "item": r.item or "",
+        "qty": float(r.qty or 0), "profit": float(r.profit or 0),
+        "revenue": float(r.revenue or 0), "week_start": pd.Timestamp(r.week_start),
+    } for r in rows])
+    provs = (long[["branch", "week_start"]].drop_duplicates()
+                .assign(file="(database)")[["file", "branch", "week_start"]]
+                .to_dict("records"))
+    return _reshape([long], provs)
+
+
+def load_panel(directory=None) -> dict:
+    """Read uploaded Excel files under ``directory`` (or the configured
+    ``weekly_sales_dir``) when there are any there - the on-disk path this
+    always used to take, still used by tests that populate a directory
+    directly. Falls back to WeeklySalesLine in the database otherwise, which
+    is what a real deploy with no local filesystem to speak of actually has.
+    """
+    d = Path(directory) if directory else weekly_dir()
+    files = [f for f in sorted(glob.glob(str(d / "**" / "*.xls*"), recursive=True))
+             if not os.path.basename(f).startswith("~$")]
+    if not files:
+        return _load_panel_from_db()
+    frames, provs = [], []
+    for f in files:
+        code, ws = parse_name(f)
+        if not code or ws is None:
+            continue
+        it = _items(f)
+        it["branch"] = code
+        it["week_start"] = ws
+        frames.append(it)
+        provs.append({"file": os.path.basename(f), "branch": code, "week_start": ws})
+    return _reshape(frames, provs)
 
 
 # ------------------------------------------------------- stockout unconstraining
@@ -205,17 +348,107 @@ def weekly_inventory_dir() -> Path:
     return p
 
 
+def parse_upload_inventory(raw: bytes, filename: str, branch_code: str | None = None):
+    """Parse one uploaded weekly-inventory file's bytes -> (branch_code,
+    week_start, rows_df[sku, qty_on_hand]), or None if the filename doesn't
+    carry a recognised branch + week, or the sheet has no usable qty column.
+    The week always comes from the filename; the branch does too UNLESS
+    ``branch_code`` is given explicitly."""
+    import io
+    from wms.analytics import inventory as _inv
+
+    code, ws = parse_name(filename)
+    if branch_code:
+        code = branch_code.strip().upper()
+    if not code or ws is None:
+        return None
+    try:
+        raw_x = pd.read_excel(io.BytesIO(raw), header=0, dtype=str)
+    except Exception:                                  # noqa: BLE001
+        return None
+    sc = _inv._pick(raw_x.columns, _inv._SKU_KEYS) or raw_x.columns[0]
+    qc = _inv._pick(raw_x.columns, _inv._QTY_KEYS)
+    if qc is None:
+        return None
+    raw_x = raw_x[raw_x[sc].notna()]
+    out = pd.DataFrame({
+        "sku": raw_x[sc].astype(str).str.strip(),
+        "qty_on_hand": pd.to_numeric(raw_x[qc], errors="coerce"),
+    })
+    out = out[out["sku"].str.len() > 0]
+    out["qty_on_hand"] = out["qty_on_hand"].fillna(0).clip(lower=0)
+    return code, ws, out.groupby("sku", as_index=False)["qty_on_hand"].sum()
+
+
+def save_inventory_week(branch_code: str, week_start, rows: pd.DataFrame) -> int:
+    """Replace one (branch, week)'s rows in WeeklyStockSnapshotLine. Returns
+    the number of line rows saved."""
+    from wms.db import SessionLocal
+    from wms.models import WeeklyStockSnapshotLine
+
+    week_date = pd.Timestamp(week_start).date()
+    db = SessionLocal()
+    try:
+        db.query(WeeklyStockSnapshotLine).filter(
+            WeeklyStockSnapshotLine.branch_code == branch_code,
+            WeeklyStockSnapshotLine.week_start == week_date).delete()
+        n = 0
+        for r in rows.itertuples():
+            db.add(WeeklyStockSnapshotLine(
+                branch_code=branch_code, sku=r.sku, week_start=week_date,
+                qty_on_hand=float(r.qty_on_hand)))
+            n += 1
+        db.commit()
+        return n
+    finally:
+        db.close()
+
+
+def _load_inventory_panel_from_db(keys, weeks):
+    from wms.db import SessionLocal
+    from wms.models import WeeklyStockSnapshotLine
+
+    db = SessionLocal()
+    try:
+        rows = db.query(WeeklyStockSnapshotLine).all()
+    finally:
+        db.close()
+    if not rows:
+        return None
+    anchor = pd.Timestamp(weeks[0])
+    W = len(weeks)
+    k_ix = {k: i for i, k in enumerate(keys)}
+    OH = np.full((len(keys), W), np.nan, np.float32)
+    seen = False
+    for r in rows:
+        wi = int(round((pd.Timestamp(r.week_start) - anchor).days / 7))
+        if wi < 0 or wi >= W:
+            continue
+        i = k_ix.get((r.branch_code, r.sku))
+        if i is None:
+            continue
+        OH[i, wi] = max(0.0, float(r.qty_on_hand or 0))
+        seen = True
+    return OH if seen else None
+
+
 def load_inventory_panel(keys, weeks, directory=None):
     """``(S, W)`` on-hand aligned to the sales panel's ``keys``/``weeks``, from
     the weekly Hansa stock exports. ``nan`` where a (branch, SKU, week) has no
-    reading; NEGATIVE figures are read as 0 (Hansa opening-balance artefacts)."""
+    reading; NEGATIVE figures are read as 0 (Hansa opening-balance artefacts).
+
+    Reads uploaded Excel files under ``directory`` (or the configured
+    ``weekly_inventory_dir``) when there are any there - the on-disk path this
+    always used to take, still used by tests that populate a directory
+    directly. Falls back to WeeklyStockSnapshotLine in the database otherwise.
+    """
     if not keys or not weeks:
         return None
     d = Path(directory) if directory else weekly_inventory_dir()
     files = [f for f in sorted(glob.glob(str(d / "**" / "*.xls*"), recursive=True))
              if not os.path.basename(f).startswith("~$")]
     if not files:
-        return None
+        return _load_inventory_panel_from_db(keys, weeks)
     from wms.analytics import inventory as _inv
     anchor = pd.Timestamp(weeks[0])
     W = len(weeks)

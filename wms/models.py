@@ -355,6 +355,83 @@ class SalesRecord(TimestampedBase):
 
 
 # ======================================================================
+# FILE-UPLOAD-DERIVED ANALYTICS DATA
+#   These three used to live purely as uploaded Excel files under data/ -
+#   fine on a machine with a real disk, but Render's free-tier filesystem is
+#   ephemeral (wiped on every restart/redeploy), so anything that only lived
+#   on disk was invisible again a few minutes after being uploaded. Each
+#   upload now parses straight into one of these tables instead; branch_code
+#   and sku are free text (not FKs), same as StockOnHand above, since a
+#   HansaWorld export's codes don't always exactly match the curated
+#   Branch/Product tables and shouldn't be rejected for that.
+# ======================================================================
+class MonthlySalesLine(TimestampedBase):
+    """One row per (branch, sku, month) - the 'Item Statistics' monthly
+    exports that feed the Sales & Forecasting page's demand model."""
+    __tablename__ = "monthly_sales_lines"
+    __table_args__ = (
+        UniqueConstraint("branch_code", "sku", "period",
+                         name="uq_msl_branch_sku_period"),
+        Index("ix_msl_branch_period", "branch_code", "period"),
+    )
+
+    branch_code = Column(String(20), nullable=False)
+    sku = Column(String(50), nullable=False)
+    item = Column(String(200), nullable=True)
+    period = Column(Date, nullable=False)              # month-end date
+    qty = Column(Numeric(14, 2), nullable=False, default=0)
+    turnover = Column(Numeric(14, 2), nullable=True)
+    profit = Column(Numeric(14, 2), nullable=True)
+    gp_pct = Column(Numeric(7, 3), nullable=True)
+    day_from = Column(Integer, nullable=True)
+    day_to = Column(Integer, nullable=True)
+
+
+class WeeklySalesLine(TimestampedBase):
+    """One row per (branch, sku, week) - feeds Flow Analysis's KPIs and the
+    weekly per-SKU demand-forecast models. ``is_simulated`` rows are the
+    monthly-history-derived gap-filler weekly_simulate.py builds for a
+    branch/week with no real weekly upload yet - never both real and
+    simulated for the same (branch, week) at once in practice (simulate
+    explicitly skips days a real upload already covers), but the constraint
+    allows it rather than assumes it, since a real upload's own save doesn't
+    reach into simulated rows to clean them up (regenerate() does, wholesale,
+    right after)."""
+    __tablename__ = "weekly_sales_lines"
+    __table_args__ = (
+        UniqueConstraint("branch_code", "sku", "week_start", "is_simulated",
+                         name="uq_wsl_branch_sku_week"),
+        Index("ix_wsl_branch_week", "branch_code", "week_start"),
+    )
+
+    branch_code = Column(String(20), nullable=False)
+    sku = Column(String(50), nullable=False)
+    is_simulated = Column(Boolean, nullable=False, default=False)
+    item = Column(String(200), nullable=True)
+    week_start = Column(Date, nullable=False)
+    qty = Column(Numeric(14, 2), nullable=False, default=0)
+    profit = Column(Numeric(14, 2), nullable=True)
+    revenue = Column(Numeric(14, 2), nullable=True)
+
+
+class WeeklyStockSnapshotLine(TimestampedBase):
+    """One row per (branch, sku, week) - the weekly Hansa on-hand exports used
+    to spot stockout weeks in the weekly demand model (see weekly_forecast.py's
+    'stockout unconstraining')."""
+    __tablename__ = "weekly_stock_snapshot_lines"
+    __table_args__ = (
+        UniqueConstraint("branch_code", "sku", "week_start",
+                         name="uq_wssl_branch_sku_week"),
+        Index("ix_wssl_branch_week", "branch_code", "week_start"),
+    )
+
+    branch_code = Column(String(20), nullable=False)
+    sku = Column(String(50), nullable=False)
+    week_start = Column(Date, nullable=False)
+    qty_on_hand = Column(Numeric(14, 2), nullable=False, default=0)
+
+
+# ======================================================================
 # AUDIT  (every mutating action, with the acting user)
 # ======================================================================
 class AuditLog(TimestampedBase):

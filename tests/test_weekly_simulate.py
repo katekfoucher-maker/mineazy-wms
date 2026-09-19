@@ -21,21 +21,79 @@ def _month_file(path, rows):
         pd.DataFrame(recs).to_excel(xl, sheet_name="Item Statistics", index=False)
 
 
-def _week_file(path, rows):
-    with pd.ExcelWriter(path) as xl:
+def _upload_week(branch_code, filename, rows):
+    """Push one real weekly-sales file straight into WeeklySalesLine, the same
+    way the /analytics/upload-weekly route does - real weekly data is
+    database-only now, same as the simulated rows it sits alongside."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf) as xl:
         pd.DataFrame([{"Item No": s, "Item": it, "Qty": q} for s, it, q in rows]
                     ).to_excel(xl, sheet_name="Item Statistics", index=False)
+    parsed = wf.parse_upload_sales(buf.getvalue(), filename, branch_code=branch_code)
+    assert parsed, f"could not parse {filename}"
+    code, ws, df = parsed
+    wf.save_week(code, ws, df)
+    return ws
 
 
 @pytest.fixture(autouse=True)
-def _isolate(tmp_path_factory, monkeypatch):
+def _isolate(tmp_path_factory, monkeypatch, seeded):
+    """history_dir points at an empty temp dir for the monthly SOURCE files
+    these tests write directly (monthly_sales.load_panel()'s "files if
+    present" path picks them up). weekly_dir is monkeypatched too, purely so
+    weekly_simulate.clear()'s legacy file cleanup never touches the real
+    project's data/ directory - real and simulated weekly rows are both
+    database-only now (WeeklySalesLine), so each test clears that table (and
+    MonthlySalesLine) itself rather than relying on directory isolation."""
     wd = tmp_path_factory.mktemp("weekly")
     hd = tmp_path_factory.mktemp("monthly")
     monkeypatch.setattr(wf, "weekly_dir", lambda: wd)
     monkeypatch.setattr(monthly_sales, "history_dir", lambda: hd)
     wf._CACHE.clear()
     wf._PANEL_CACHE.clear()
-    return wd, hd
+    _clear_weekly_sales_lines()
+    _clear_monthly_sales_lines()
+    yield wd, hd
+    _clear_weekly_sales_lines()
+    _clear_monthly_sales_lines()
+
+
+def _clear_weekly_sales_lines():
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine
+    db = SessionLocal()
+    try:
+        db.query(WeeklySalesLine).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _clear_monthly_sales_lines():
+    from wms.db import SessionLocal
+    from wms.models import MonthlySalesLine
+    db = SessionLocal()
+    try:
+        db.query(MonthlySalesLine).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def _simulated_weeks(branch_code: str | None = None):
+    """[(branch_code, week_start date), ...] for every simulated row - the
+    DB equivalent of the old ``simulated_dir().glob("*.xlsx")`` check."""
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine
+    db = SessionLocal()
+    try:
+        q = db.query(WeeklySalesLine.branch_code, WeeklySalesLine.week_start).filter(
+            WeeklySalesLine.is_simulated.is_(True))
+        if branch_code:
+            q = q.filter(WeeklySalesLine.branch_code == branch_code)
+        return sorted(set(q.all()))
+    finally:
+        db.close()
 
 
 def test_regenerate_fills_every_week_of_a_month_with_no_real_data(_isolate):
@@ -48,15 +106,14 @@ def test_regenerate_fills_every_week_of_a_month_with_no_real_data(_isolate):
     assert summary["weeks_written"] > 0
     assert summary["branches"] == ["BM"]
 
-    files = sorted(wsim.simulated_dir().glob("*.xlsx"))
-    assert files
-    for f in files:
-        code, ws = wf.parse_name(f.name)
-        assert code == "BM"
+    weeks = _simulated_weeks("BM")
+    assert weeks
+    for _code, ws in weeks:
+        ws = pd.Timestamp(ws)
         assert (ws.year, ws.month) in {(2026, 4), (2026, 5)}   # month + its edge week
 
     # the simulated weeks reconstruct the month's per-SKU total
-    panel = wf.load_panel(directory=wd)
+    panel = wf.load_panel()
     i1 = panel["keys"].index(("BM", "SKU1"))
     i2 = panel["keys"].index(("BM", "SKU2"))
     assert panel["MAT"][i1].sum() == pytest.approx(100, abs=0.5)
@@ -71,17 +128,15 @@ def test_a_month_with_partial_real_weekly_coverage_fills_only_the_gap_days(_isol
     own figures are never touched or blended with the simulated estimate."""
     wd, hd = _isolate
     _month_file(hd / "MAY BM SALES.xlsx", [("SKU1", "Widget", 310, 0.0, None)])   # 31 days -> 10/day
-    _week_file(wd / "BM 2026-05-04 week.xlsx", [("SKU1", "Widget", 49)])          # Mon 4 - Sun 10, real
+    _upload_week("BM", "BM 2026-05-04 week.xlsx", [("SKU1", "Widget", 49)])       # Mon 4 - Sun 10, real
 
     summary = wsim.regenerate()
     assert "BM" in summary["branches"]                    # the rest of May still needs filling
 
-    for f in wsim.simulated_dir().glob("*.xlsx"):
-        code, ws = wf.parse_name(f.name)
-        assert code == "BM"
-        assert ws != pd.Timestamp("2026-05-04")           # the real week is never re-simulated
+    for _code, ws in _simulated_weeks("BM"):
+        assert pd.Timestamp(ws) != pd.Timestamp("2026-05-04")   # the real week is never re-simulated
 
-    panel = wf.load_panel(directory=wd)
+    panel = wf.load_panel()
     i = panel["keys"].index(("BM", "SKU1"))
     # the real week's own (different) total, plus the other 24 days at 10/day
     assert panel["MAT"][i].sum() == pytest.approx(49 + 24 * 10, abs=0.5)
@@ -91,15 +146,15 @@ def test_a_fully_covered_month_is_never_simulated(_isolate):
     wd, hd = _isolate
     _month_file(hd / "MAY BM SALES.xlsx", [("SKU1", "Widget", 140, 0.0, None)])
     wsim.regenerate()
-    assert list(wsim.simulated_dir().glob("*.xlsx"))     # May got simulated first
+    assert _simulated_weeks("BM")                          # May got simulated first
 
     # five real weeks covering every day of May 2026 end to end
     for ws in ("2026-04-27", "2026-05-04", "2026-05-11", "2026-05-18", "2026-05-25"):
-        _week_file(wd / f"BM {ws} week.xlsx", [("SKU1", "Widget", 7)])
+        _upload_week("BM", f"BM {ws} week.xlsx", [("SKU1", "Widget", 7)])
     summary = wsim.regenerate()
     assert "BM" not in summary["branches"]                # nothing left uncovered
 
-    panel = wf.load_panel(directory=wd)
+    panel = wf.load_panel()
     i = panel["keys"].index(("BM", "SKU1"))
     assert panel["MAT"][i].sum() == pytest.approx(35, abs=0.01)   # only the 5 real weeks, not 175
 
@@ -110,13 +165,13 @@ def test_other_branches_and_months_are_unaffected(_isolate):
     _month_file(hd / "JUNE BM SALES.xlsx", [("SKU1", "Widget", 80, 0.0, None)])
     _month_file(hd / "MAY GWA SALES.xlsx", [("SKU9", "Gizmo", 60, 0.0, None)])
 
-    _week_file(wd / "BM 2026-05-04 week.xlsx", [("SKU1", "Widget", 20)])
+    _upload_week("BM", "BM 2026-05-04 week.xlsx", [("SKU1", "Widget", 20)])
     summary = wsim.regenerate()
 
     # BM's other May days still need filling; June for BM and May for GWA are untouched by real data
     assert "GWA" in summary["branches"]
     assert "BM" in summary["branches"]
-    panel = wf.load_panel(directory=wd)
+    panel = wf.load_panel()
     i_bm = panel["keys"].index(("BM", "SKU1"))
     i_gwa = panel["keys"].index(("GWA", "SKU9"))
     # real week (20) + the other 24 days of May at 100/31 per day + all of June
@@ -148,19 +203,19 @@ def test_regenerate_is_idempotent_and_clears_stale_weeks(_isolate):
     wd, hd = _isolate
     _month_file(hd / "MAY BM SALES.xlsx", [("SKU1", "Widget", 50, 0.0, None)])
     wsim.regenerate()
-    before = sorted(f.name for f in wsim.simulated_dir().glob("*.xlsx"))
+    before = set(_simulated_weeks())
 
     _month_file(hd / "JUNE BM SALES.xlsx", [("SKU1", "Widget", 30, 0.0, None)])
     wsim.regenerate()
-    after = sorted(f.name for f in wsim.simulated_dir().glob("*.xlsx"))
-    assert set(before) < set(after)                       # June's weeks were added
+    after = set(_simulated_weeks())
+    assert before < after                                 # June's weeks were added
 
     # remove the monthly source entirely -> a rebuild leaves nothing simulated
     for f in hd.glob("*.xlsx"):
         f.unlink()
     summary = wsim.regenerate()
     assert summary["weeks_written"] == 0
-    assert not list(wsim.simulated_dir().glob("*.xlsx"))
+    assert not _simulated_weeks()
 
 
 def test_no_monthly_history_is_a_no_op(_isolate):
@@ -178,13 +233,11 @@ def test_a_partial_month_export_only_simulates_the_days_it_covers(_isolate):
     summary = wsim.regenerate()
     assert "FL" in summary["branches"]
 
-    for f in wsim.simulated_dir().glob("*.xlsx"):
-        code, ws = wf.parse_name(f.name)
-        assert code == "FL"
+    for _code, ws in _simulated_weeks("FL"):
         # every simulated week must fall within the 1-12 September span
-        assert ws.date() <= pd.Timestamp("2026-09-12").date()
+        assert pd.Timestamp(ws).date() <= pd.Timestamp("2026-09-12").date()
 
-    panel = wf.load_panel(directory=wd)
+    panel = wf.load_panel()
     i = panel["keys"].index(("FL", "SKU1"))
     # exactly the reported total - nothing invented for days 13-30
     assert panel["MAT"][i].sum() == pytest.approx(120, abs=0.5)
@@ -196,7 +249,8 @@ def test_upload_monthly_sales_route_works_without_a_ui_card(_isolate, seeded):
     any now-redundant simulated week the moment real data arrives), but the
     underlying POST /analytics/upload (kind=sales) route must keep working -
     a branch's history still arrives this way whenever a real weekly export
-    isn't ready yet."""
+    isn't ready yet. The route writes straight into MonthlySalesLine now, not
+    a file - see monthly_sales.parse_upload / save_month."""
     wd, hd = _isolate
     from fastapi.testclient import TestClient
     from wms.api.main import app
@@ -218,5 +272,12 @@ def test_upload_monthly_sales_route_works_without_a_ui_card(_isolate, seeded):
               follow_redirects=False)
     assert r.status_code == 303
 
-    assert sorted(p.name for p in hd.iterdir()) == ["MAY BM SALES.xlsx"]
-    assert list(wsim.simulated_dir().glob("BM *.xlsx"))   # gap-filled automatically
+    from wms.db import SessionLocal
+    from wms.models import MonthlySalesLine
+    db = SessionLocal()
+    try:
+        rows = db.query(MonthlySalesLine).filter(MonthlySalesLine.branch_code == "BM").all()
+    finally:
+        db.close()
+    assert rows and rows[0].sku == "AAA"
+    assert _simulated_weeks("BM")                          # gap-filled automatically

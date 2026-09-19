@@ -12,11 +12,13 @@ copied row's "created_by" / "user_id" reference is set to NULL instead of
 carrying over a demo user id that won't exist in the target - the business
 record itself is kept, just without old attribution.
 
-    python -m wms.scripts.migrate_to_mysql [path/to/wms.db]
+    python -m wms.scripts.migrate_to_mysql [path/to/wms.db] [--yes]
 
 Defaults to the project's wms.db if no path is given. The target is
 whatever DATABASE_URL (+ DB_SSL_CA) your environment already points to -
-the same variables you used for wms.scripts.bootstrap.
+the same variables you used for wms.scripts.bootstrap. Pass --yes (or set
+MIGRATE_YES=1) to skip the confirmation prompt, e.g. for a non-interactive
+shell where piped stdin isn't reliable.
 
 Safe to re-run: skips any row whose id already exists in the target, and
 reports (without aborting the rest) any row that fails to copy - e.g. text
@@ -24,6 +26,7 @@ too long for a column, or a duplicate unique value.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -45,7 +48,7 @@ _USER_FK_COLUMNS = {
 }
 
 
-def run(sqlite_path: str) -> None:
+def run(sqlite_path: str, *, assume_yes: bool = False) -> None:
     src_path = Path(sqlite_path).resolve()
     if not src_path.exists():
         raise SystemExit(f"Source SQLite file not found: {src_path}")
@@ -54,7 +57,9 @@ def run(sqlite_path: str) -> None:
     print(f"Target: {target_engine.url.render_as_string(hide_password=True)}")
     print(f"Skipping table: 'users' (create your own real login with "
          "wms.scripts.bootstrap instead)")
-    if input("Copy all other data from source into target? [y/N] ").strip().lower() != "y":
+    if assume_yes:
+        print("Copy all other data from source into target? [y/N] y  (--yes)")
+    elif input("Copy all other data from source into target? [y/N] ").strip().lower() != "y":
         print("Aborted.")
         return
 
@@ -79,15 +84,30 @@ def run(sqlite_path: str) -> None:
                 existing_ids = {r[0] for r in dst.execute(select(table.c.id))}
             new_rows = [r for r in rows if r["id"] not in existing_ids]
 
+            # bulk-insert in chunks (one network round trip per chunk, not
+            # per row - matters a lot for a table with tens of thousands of
+            # rows). A chunk that fails falls back to row-by-row, only for
+            # that chunk, so one bad row still doesn't lose its neighbours
+            # or need a full table dump to see which row it was.
             copied = failed = 0
-            for r in new_rows:
+            CHUNK = 1000
+            for i in range(0, len(new_rows), CHUNK):
+                chunk = new_rows[i:i + CHUNK]
                 try:
                     with target_engine.begin() as dst:
-                        dst.execute(insert(table), [r])
-                    copied += 1
-                except Exception as e:                       # noqa: BLE001
-                    failed += 1
-                    print(f"    ! {table.name} id={r['id']} failed: {e}")
+                        dst.execute(insert(table), chunk)
+                    copied += len(chunk)
+                except Exception:                             # noqa: BLE001
+                    for r in chunk:
+                        try:
+                            with target_engine.begin() as dst:
+                                dst.execute(insert(table), [r])
+                            copied += 1
+                        except Exception as e:                # noqa: BLE001
+                            failed += 1
+                            print(f"    ! {table.name} id={r['id']} failed: {e}")
+                if len(new_rows) > CHUNK:
+                    print(f"    {table.name}: {min(i + CHUNK, len(new_rows))}/{len(new_rows)}")
 
             already = len(rows) - len(new_rows)
             msg = f"  {table.name}: {copied} copied"
@@ -113,4 +133,7 @@ def run(sqlite_path: str) -> None:
 
 
 if __name__ == "__main__":
-    run(sys.argv[1] if len(sys.argv) > 1 else "wms.db")
+    args = sys.argv[1:]
+    yes = "--yes" in args or os.environ.get("MIGRATE_YES") == "1"
+    args = [a for a in args if a != "--yes"]
+    run(args[0] if args else "wms.db", assume_yes=yes)

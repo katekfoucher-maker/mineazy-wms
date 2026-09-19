@@ -104,59 +104,51 @@ def _parse_name(fname: str):
     return month, branch
 
 
-def load_panel(directory: str | os.PathLike | None = None) -> pd.DataFrame:
-    """Return one row per (branch, sku, month).
+_PANEL_COLUMNS = ["branch_code", "branch", "sku", "item", "category", "period",
+                  "month_label", "qty", "turnover", "profit", "gp_pct",
+                  "day_from", "day_to"]
 
-    Columns: branch_code, branch, sku, item, category, period (Timestamp,
-    month-end), month_label, qty, turnover, profit, gp_pct, day_from, day_to.
-    ``profit`` is read directly from a "Profit" column when the export has one
-    (HansaWorld's own margin figure); the last two columns default to the whole
-    month (1..days-in-month) - a filename carrying an explicit day range (a
-    mid-month, not-yet-complete export) narrows them, so a downstream reader
-    knows the qty covers only part of the month.
-    """
-    d = Path(directory) if directory else history_dir()
-    files = sorted(glob.glob(str(d / "*.xls*")))
-    files = [f for f in files if not os.path.basename(f).startswith("~$")]
-    frames = []
-    for f in files:
-        month, branch = _parse_name(f)
-        if not month or not branch:
-            continue
-        try:
-            raw = pd.read_excel(f, sheet_name="Item Statistics", header=0)
-        except ValueError:
-            raw = pd.read_excel(f, header=0)
-        raw = raw.rename(columns={raw.columns[0]: "sku", raw.columns[1]: "item",
-                                  raw.columns[2]: "qty"})
-        raw = raw[raw["sku"].notna()].copy()          # drop the totals row
-        raw["sku"] = raw["sku"].astype(str).str.strip()
-        raw = raw[raw["sku"].str.len() > 0]
-        raw["qty"] = pd.to_numeric(raw["qty"], errors="coerce").fillna(0.0)
-        tcol = next((c for c in raw.columns if str(c).lower().startswith("turnover")), None)
-        gcol = next((c for c in raw.columns if str(c).lower().startswith("gp")), None)
-        pcol = next((c for c in raw.columns if str(c).strip().lower() == "profit"), None)
-        raw["turnover"] = pd.to_numeric(raw[tcol], errors="coerce") if tcol else 0.0
-        raw["gp_pct"] = pd.to_numeric(raw[gcol], errors="coerce") if gcol else None
-        raw["profit"] = pd.to_numeric(raw[pcol], errors="coerce") if pcol else None
-        code, disp = branch
-        period = pd.Timestamp(year=_DEFAULT_YEAR, month=month, day=1) + pd.offsets.MonthEnd(0)
-        day_from, day_to = _parse_day_range(f) or (1, int(period.day))
-        day_to = min(day_to, int(period.day))
-        out = raw[["sku", "item", "qty", "turnover", "profit", "gp_pct"]].copy()
-        out["branch_code"] = code
-        out["branch"] = disp
-        out["period"] = period
-        out["month_label"] = period.strftime("%b %Y")
-        out["day_from"] = day_from
-        out["day_to"] = day_to
-        frames.append(out)
 
+def _read_file(f: str) -> pd.DataFrame:
+    """One file -> rows with columns sku, item, qty, turnover, profit, gp_pct,
+    branch_code, branch, period, month_label, day_from, day_to. Empty frame if
+    the filename doesn't carry a recognised month + branch."""
+    month, branch = _parse_name(f)
+    if not month or not branch:
+        return pd.DataFrame()
+    try:
+        raw = pd.read_excel(f, sheet_name="Item Statistics", header=0)
+    except ValueError:
+        raw = pd.read_excel(f, header=0)
+    raw = raw.rename(columns={raw.columns[0]: "sku", raw.columns[1]: "item",
+                              raw.columns[2]: "qty"})
+    raw = raw[raw["sku"].notna()].copy()          # drop the totals row
+    raw["sku"] = raw["sku"].astype(str).str.strip()
+    raw = raw[raw["sku"].str.len() > 0]
+    raw["qty"] = pd.to_numeric(raw["qty"], errors="coerce").fillna(0.0)
+    tcol = next((c for c in raw.columns if str(c).lower().startswith("turnover")), None)
+    gcol = next((c for c in raw.columns if str(c).lower().startswith("gp")), None)
+    pcol = next((c for c in raw.columns if str(c).strip().lower() == "profit"), None)
+    raw["turnover"] = pd.to_numeric(raw[tcol], errors="coerce") if tcol else 0.0
+    raw["gp_pct"] = pd.to_numeric(raw[gcol], errors="coerce") if gcol else None
+    raw["profit"] = pd.to_numeric(raw[pcol], errors="coerce") if pcol else None
+    code, disp = branch
+    period = pd.Timestamp(year=_DEFAULT_YEAR, month=month, day=1) + pd.offsets.MonthEnd(0)
+    day_from, day_to = _parse_day_range(f) or (1, int(period.day))
+    day_to = min(day_to, int(period.day))
+    out = raw[["sku", "item", "qty", "turnover", "profit", "gp_pct"]].copy()
+    out["branch_code"] = code
+    out["branch"] = disp
+    out["period"] = period
+    out["month_label"] = period.strftime("%b %Y")
+    out["day_from"] = day_from
+    out["day_to"] = day_to
+    return out
+
+
+def _finish_panel(frames: list[pd.DataFrame]) -> pd.DataFrame:
     if not frames:
-        return pd.DataFrame(columns=["branch_code", "branch", "sku", "item", "category",
-                                     "period", "month_label", "qty", "turnover", "profit",
-                                     "gp_pct", "day_from", "day_to"])
-
+        return pd.DataFrame(columns=_PANEL_COLUMNS)
     panel = pd.concat(frames, ignore_index=True)
     # one SKU can appear twice in a month (name variants) -> sum; day_from/to
     # come from the file, uniform within a (branch, month) since the upload
@@ -169,6 +161,130 @@ def load_panel(directory: str | os.PathLike | None = None) -> pd.DataFrame:
                        day_from=("day_from", "first"), day_to=("day_to", "first")))
     panel["category"] = panel["item"].map(categorise)
     return panel.sort_values(["branch_code", "sku", "period"]).reset_index(drop=True)
+
+
+def parse_upload(raw: bytes, filename: str, branch_code: str | None = None) -> pd.DataFrame:
+    """Parse one uploaded file's bytes the same way a file on disk would be -
+    used by the upload route to write straight into MonthlySalesLine. The
+    month always comes from the filename; the branch does too UNLESS
+    ``branch_code`` is given explicitly (the upload form lets the user pick
+    the branch, so the filename itself only has to carry the month)."""
+    import io
+    month, branch = _parse_name(filename)
+    if not month:
+        return pd.DataFrame()
+    if branch_code:
+        branch = (branch_code.strip().upper(),
+                 BRANCH_NAME.get(branch_code.strip().upper(), branch_code.strip().upper()))
+    if not branch:
+        return pd.DataFrame()
+    try:
+        raw_df = pd.read_excel(io.BytesIO(raw), sheet_name="Item Statistics", header=0)
+    except ValueError:
+        raw_df = pd.read_excel(io.BytesIO(raw), header=0)
+    raw_df = raw_df.rename(columns={raw_df.columns[0]: "sku", raw_df.columns[1]: "item",
+                                    raw_df.columns[2]: "qty"})
+    raw_df = raw_df[raw_df["sku"].notna()].copy()
+    raw_df["sku"] = raw_df["sku"].astype(str).str.strip()
+    raw_df = raw_df[raw_df["sku"].str.len() > 0]
+    raw_df["qty"] = pd.to_numeric(raw_df["qty"], errors="coerce").fillna(0.0)
+    tcol = next((c for c in raw_df.columns if str(c).lower().startswith("turnover")), None)
+    gcol = next((c for c in raw_df.columns if str(c).lower().startswith("gp")), None)
+    pcol = next((c for c in raw_df.columns if str(c).strip().lower() == "profit"), None)
+    raw_df["turnover"] = pd.to_numeric(raw_df[tcol], errors="coerce") if tcol else 0.0
+    raw_df["gp_pct"] = pd.to_numeric(raw_df[gcol], errors="coerce") if gcol else None
+    raw_df["profit"] = pd.to_numeric(raw_df[pcol], errors="coerce") if pcol else None
+    code, disp = branch
+    period = pd.Timestamp(year=_DEFAULT_YEAR, month=month, day=1) + pd.offsets.MonthEnd(0)
+    day_from, day_to = _parse_day_range(filename) or (1, int(period.day))
+    day_to = min(day_to, int(period.day))
+    out = raw_df[["sku", "item", "qty", "turnover", "profit", "gp_pct"]].copy()
+    out["branch_code"] = code
+    out["branch"] = disp
+    out["period"] = period
+    out["month_label"] = period.strftime("%b %Y")
+    out["day_from"] = day_from
+    out["day_to"] = day_to
+    return _finish_panel([out])
+
+
+def save_month(branch_code: str, period, rows: pd.DataFrame) -> int:
+    """Replace one (branch_code, period)'s rows in MonthlySalesLine. Returns
+    the number of line rows saved."""
+    from wms.db import SessionLocal
+    from wms.models import MonthlySalesLine
+
+    period_date = pd.Timestamp(period).date()
+    db = SessionLocal()
+    try:
+        db.query(MonthlySalesLine).filter(
+            MonthlySalesLine.branch_code == branch_code,
+            MonthlySalesLine.period == period_date).delete()
+        n = 0
+        for r in rows.itertuples():
+            db.add(MonthlySalesLine(
+                branch_code=branch_code, sku=r.sku, item=r.item,
+                period=period_date,
+                qty=float(r.qty), turnover=float(r.turnover or 0),
+                profit=(float(r.profit) if pd.notna(r.profit) else None),
+                gp_pct=(float(r.gp_pct) if pd.notna(r.gp_pct) else None),
+                day_from=int(r.day_from), day_to=int(r.day_to)))
+            n += 1
+        db.commit()
+        return n
+    finally:
+        db.close()
+
+
+def _load_panel_from_db() -> pd.DataFrame:
+    from wms.db import SessionLocal
+    from wms.models import MonthlySalesLine
+
+    db = SessionLocal()
+    try:
+        rows = db.query(MonthlySalesLine).all()
+        if not rows:
+            return pd.DataFrame(columns=_PANEL_COLUMNS)
+        panel = pd.DataFrame([{
+            "branch_code": r.branch_code,
+            "branch": BRANCH_NAME.get(r.branch_code, r.branch_code),
+            "sku": r.sku, "item": r.item or "",
+            "period": pd.Timestamp(r.period),
+            "month_label": pd.Timestamp(r.period).strftime("%b %Y"),
+            "qty": float(r.qty or 0), "turnover": float(r.turnover or 0),
+            "profit": (float(r.profit) if r.profit is not None else None),
+            "gp_pct": (float(r.gp_pct) if r.gp_pct is not None else None),
+            "day_from": r.day_from, "day_to": r.day_to,
+        } for r in rows])
+        panel["category"] = panel["item"].map(categorise)
+        return panel.sort_values(["branch_code", "sku", "period"]).reset_index(drop=True)
+    finally:
+        db.close()
+
+
+def load_panel(directory: str | os.PathLike | None = None) -> pd.DataFrame:
+    """Return one row per (branch, sku, month).
+
+    Columns: branch_code, branch, sku, item, category, period (Timestamp,
+    month-end), month_label, qty, turnover, profit, gp_pct, day_from, day_to.
+    ``profit`` is read directly from a "Profit" column when the export has one
+    (HansaWorld's own margin figure); the last two columns default to the whole
+    month (1..days-in-month) - a filename carrying an explicit day range (a
+    mid-month, not-yet-complete export) narrows them, so a downstream reader
+    knows the qty covers only part of the month.
+
+    Reads uploaded Excel files under ``directory`` (or the configured
+    ``sales_history_dir``) when there are any there - the on-disk path this
+    always used to take, still used by tests that populate a directory
+    directly. Falls back to MonthlySalesLine in the database otherwise, which
+    is what a real deploy with no local filesystem to speak of actually has.
+    """
+    d = Path(directory) if directory else history_dir()
+    files = sorted(glob.glob(str(d / "*.xls*")))
+    files = [f for f in files if not os.path.basename(f).startswith("~$")]
+    if not files:
+        return _load_panel_from_db()
+    return _finish_panel([_read_file(f) for f in files])
 
 
 def coverage(panel: pd.DataFrame) -> dict:

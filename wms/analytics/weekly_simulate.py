@@ -33,8 +33,6 @@ import pandas as pd
 from wms.analytics import monthly_sales
 from wms.analytics import weekly_forecast as wfc
 
-_SUFFIX = " week (simulated).xlsx"
-
 
 def simulated_dir() -> Path:
     return wfc.weekly_dir() / "_simulated_from_monthly"
@@ -58,14 +56,32 @@ def _real_week_ranges() -> dict:
 
 def _real_covered_days() -> dict:
     """branch_code -> {calendar day, ...} already reported by a REAL weekly
-    file (every day in its ``[week_start, week_start + 6]`` span) - the exact
-    set of days :func:`_week_buckets` must leave untouched."""
+    upload (every day in its ``[week_start, week_start + 6]`` span) - the
+    exact set of days :func:`_week_buckets` must leave untouched. Checks both
+    real files (the on-disk path tests / a hand-populated directory use) and
+    WeeklySalesLine in the database (what a real deploy actually has) -
+    unioned, never either/or, so this can only ever under-simulate a real
+    day's coverage, never double-count it."""
     out: dict = {}
     for code, ranges in _real_week_ranges().items():
         days: set = set()
         for ws, we in ranges:
             days.update(pd.date_range(ws, we, freq="D"))
         out[code] = days
+
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine
+    db = SessionLocal()
+    try:
+        rows = (db.query(WeeklySalesLine.branch_code, WeeklySalesLine.week_start)
+                  .filter(WeeklySalesLine.is_simulated.is_(False))
+                  .distinct().all())
+    finally:
+        db.close()
+    for code, ws in rows:
+        ws = pd.Timestamp(ws)
+        days = out.setdefault(code, set())
+        days.update(pd.date_range(ws, ws + pd.Timedelta(days=6), freq="D"))
     return out
 
 
@@ -105,7 +121,9 @@ def _week_buckets(year: int, month: int, day_from: int = 1, day_to: int | None =
 
 
 def clear() -> int:
-    """Delete every simulated file. Returns how many were removed."""
+    """Delete every simulated file (the on-disk path only - see
+    clear_simulated_weeks() in weekly_forecast.py for the database rows a
+    real deploy actually has). Returns how many were removed."""
     d = simulated_dir()
     if not d.exists():
         return 0
@@ -120,15 +138,17 @@ def clear() -> int:
 
 
 def regenerate() -> dict:
-    """Rebuild every simulated weekly file from the current monthly history.
-    Safe to call after any monthly or weekly upload; idempotent. The old set is
-    only cleared right before the (fast) write loop below, not up front - a
-    concurrent page load or upload that reads the simulated folder while this
-    is running should never find it empty during the (comparatively slow)
-    monthly-panel load and per-SKU apportioning that happens first."""
+    """Rebuild every simulated weekly row from the current monthly history,
+    in WeeklySalesLine (is_simulated=True). Safe to call after any monthly or
+    weekly upload; idempotent. The old set is only cleared right before the
+    write loop below, not up front - a concurrent page load or upload that
+    reads the simulated rows while this is running should never see them
+    empty during the (comparatively slow) monthly-panel load and per-SKU
+    apportioning that happens first."""
     panel = monthly_sales.load_panel()
     if panel.empty:
         clear()
+        wfc.clear_simulated_weeks()
         wfc._CACHE.clear()
         wfc._PANEL_CACHE.clear()
         return {"weeks_written": 0, "branches": [], "months_skipped": 0}
@@ -170,19 +190,15 @@ def regenerate() -> dict:
                 touched.add(bc)
 
     clear()
-    d = simulated_dir()
-    d.mkdir(parents=True, exist_ok=True)
+    wfc.clear_simulated_weeks()
     written = 0
     for (bc, w_start), skus in contrib.items():
-        rows = [{"Item No": sku, "Item": c["item"], "Qty": round(c["qty"], 2),
-                "Turnover": round(c["turnover"], 2), "Profit": round(c["profit"], 2)}
+        rows = [{"sku": sku, "item": c["item"], "qty": round(c["qty"], 2),
+                "revenue": round(c["turnover"], 2), "profit": round(c["profit"], 2)}
                for sku, c in skus.items() if c["qty"] > 0]
         if not rows:
             continue
-        df = pd.DataFrame(rows)
-        fname = f"{bc} {w_start.date().isoformat()}{_SUFFIX}"
-        with pd.ExcelWriter(d / fname, engine="xlsxwriter") as xw:
-            df.to_excel(xw, index=False, sheet_name="Item Statistics")
+        wfc.save_simulated_week(bc, w_start, pd.DataFrame(rows))
         written += 1
 
     wfc._CACHE.clear()

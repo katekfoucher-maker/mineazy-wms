@@ -73,6 +73,31 @@ def load_inventory(directory=None) -> pd.DataFrame:
               .groupby(["branch_code", "sku"], as_index=False)["on_hand"].sum())
 
 
+def parse_upload(raw: bytes, filename: str, branch_code: str) -> pd.DataFrame:
+    """Parse one uploaded branch inventory snapshot's bytes -> rows with
+    columns branch_code, sku, on_hand. Doesn't touch disk - the caller writes
+    straight into StockOnHand (the DB balance, authoritative over any file)."""
+    import io
+    ext = os.path.splitext(filename)[1].lower()
+    try:
+        raw_x = (pd.read_csv(io.BytesIO(raw), dtype=str) if ext == ".csv"
+                 else pd.read_excel(io.BytesIO(raw), dtype=str))
+    except Exception:                                  # noqa: BLE001
+        return pd.DataFrame(columns=["branch_code", "sku", "on_hand"])
+    sku_c = _pick(raw_x.columns, _SKU_KEYS)
+    qty_c = _pick(raw_x.columns, _QTY_KEYS)
+    if sku_c is None or qty_c is None:
+        return pd.DataFrame(columns=["branch_code", "sku", "on_hand"])
+    out = pd.DataFrame({
+        "branch_code": branch_code.strip().upper(),
+        "sku": raw_x[sku_c].astype(str).str.strip(),
+        "on_hand": pd.to_numeric(raw_x[qty_c], errors="coerce"),
+    })
+    out = out[(out["sku"].str.len() > 0) & out["sku"].str.lower().ne("nan")]
+    out["on_hand"] = out["on_hand"].fillna(0).clip(lower=0)
+    return out.groupby(["branch_code", "sku"], as_index=False)["on_hand"].sum()
+
+
 def coverage(inv: pd.DataFrame | None = None) -> dict:
     inv = load_inventory() if inv is None else inv
     if inv.empty:
