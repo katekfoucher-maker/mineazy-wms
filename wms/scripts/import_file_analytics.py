@@ -19,10 +19,28 @@ from __future__ import annotations
 import glob
 import os
 import sys
+import time
 from pathlib import Path
 
 from wms.analytics import monthly_sales, weekly_forecast as weekly_fc
 from wms.db import init_db
+
+_RETRIES = 3
+
+
+def _with_retries(fn, *args):
+    """Retry a flaky remote-DB write a few times with a short backoff - a
+    stalled connection over a real network is common enough (and now fails
+    fast instead of hanging, see wms/db.py's read/write/connect timeouts)
+    that one file failing shouldn't abort an otherwise-fine import run."""
+    for attempt in range(1, _RETRIES + 1):
+        try:
+            return fn(*args)
+        except Exception as e:                           # noqa: BLE001
+            if attempt == _RETRIES:
+                raise
+            print(f"    ! attempt {attempt} failed ({e}); retrying...")
+            time.sleep(2 * attempt)
 
 
 def _import_sales_history() -> None:
@@ -31,17 +49,24 @@ def _import_sales_history() -> None:
     files = [f for f in files if not os.path.basename(f).startswith("~$")]
     print(f"sales_history: {len(files)} file(s) in {d}")
     n_files = n_rows = 0
+    failed = []
     for f in files:
         panel = monthly_sales._finish_panel([monthly_sales._read_file(f)])
         if panel.empty:
             print(f"  ! skipped (unparseable name or empty): {os.path.basename(f)}")
             continue
         bc, period = panel["branch_code"].iloc[0], panel["period"].iloc[0]
-        saved = monthly_sales.save_month(bc, period, panel)
+        try:
+            saved = _with_retries(monthly_sales.save_month, bc, period, panel)
+        except Exception as e:                            # noqa: BLE001
+            print(f"  ! FAILED after {_RETRIES} attempts: {os.path.basename(f)}: {e}")
+            failed.append(os.path.basename(f))
+            continue
         n_files += 1
         n_rows += saved
         print(f"  {os.path.basename(f)}: {bc} {period.strftime('%b %Y')} - {saved} row(s)")
-    print(f"sales_history: {n_files} file(s), {n_rows} row(s) saved")
+    print(f"sales_history: {n_files} file(s), {n_rows} row(s) saved"
+         + (f", {len(failed)} FAILED: {failed}" if failed else ""))
 
 
 def _import_weekly_sales() -> None:
@@ -50,17 +75,24 @@ def _import_weekly_sales() -> None:
     files = [f for f in files if not os.path.basename(f).startswith("~$")]
     print(f"weekly_sales: {len(files)} file(s) in {d}")
     n_files = n_rows = 0
+    failed = []
     for f in files:
         code, ws = weekly_fc.parse_name(f)
         if not code or ws is None:
             print(f"  ! skipped (unparseable name): {os.path.basename(f)}")
             continue
         rows = weekly_fc._items(f)
-        saved = weekly_fc.save_week(code, ws, rows)
+        try:
+            saved = _with_retries(weekly_fc.save_week, code, ws, rows)
+        except Exception as e:                            # noqa: BLE001
+            print(f"  ! FAILED after {_RETRIES} attempts: {os.path.basename(f)}: {e}")
+            failed.append(os.path.basename(f))
+            continue
         n_files += 1
         n_rows += saved
         print(f"  {os.path.basename(f)}: {code} {ws.date()} - {saved} row(s)")
-    print(f"weekly_sales: {n_files} file(s), {n_rows} row(s) saved")
+    print(f"weekly_sales: {n_files} file(s), {n_rows} row(s) saved"
+         + (f", {len(failed)} FAILED: {failed}" if failed else ""))
 
 
 def _import_weekly_inventory() -> None:
@@ -69,6 +101,7 @@ def _import_weekly_inventory() -> None:
     files = [f for f in files if not os.path.basename(f).startswith("~$")]
     print(f"weekly_inventory: {len(files)} file(s) in {d}")
     n_files = n_rows = 0
+    failed = []
     for f in files:
         with open(f, "rb") as fh:
             raw = fh.read()
@@ -77,11 +110,17 @@ def _import_weekly_inventory() -> None:
             print(f"  ! skipped (unparseable name or no qty column): {os.path.basename(f)}")
             continue
         code, ws, rows = parsed
-        saved = weekly_fc.save_inventory_week(code, ws, rows)
+        try:
+            saved = _with_retries(weekly_fc.save_inventory_week, code, ws, rows)
+        except Exception as e:                            # noqa: BLE001
+            print(f"  ! FAILED after {_RETRIES} attempts: {os.path.basename(f)}: {e}")
+            failed.append(os.path.basename(f))
+            continue
         n_files += 1
         n_rows += saved
         print(f"  {os.path.basename(f)}: {code} {ws.date()} - {saved} row(s)")
-    print(f"weekly_inventory: {n_files} file(s), {n_rows} row(s) saved")
+    print(f"weekly_inventory: {n_files} file(s), {n_rows} row(s) saved"
+         + (f", {len(failed)} FAILED: {failed}" if failed else ""))
 
 
 def run(assume_yes: bool = False) -> None:

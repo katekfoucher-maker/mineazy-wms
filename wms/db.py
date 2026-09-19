@@ -17,8 +17,14 @@ if _URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 else:
     engine_kwargs = {"pool_size": 10, "max_overflow": 20, "pool_recycle": 1800}
+    # PyMySQL has no default read/write timeout - a connection that stalls
+    # mid-query (a dropped network path, a host-side hiccup) hangs forever
+    # instead of raising, which pool_pre_ping can't catch either (the ping
+    # query itself would hang the same way). Bounded timeouts turn that into
+    # an ordinary retriable error instead of a wedged request/process.
+    connect_args = {"connect_timeout": 10, "read_timeout": 30, "write_timeout": 30}
     if settings.db_ssl_ca:
-        connect_args = {"ssl": {"ca": settings.db_ssl_ca}}
+        connect_args["ssl"] = {"ca": settings.db_ssl_ca}
 
 engine = create_engine(_URL, echo=settings.debug, pool_pre_ping=True,
                        connect_args=connect_args, **engine_kwargs)
