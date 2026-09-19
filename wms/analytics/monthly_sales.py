@@ -210,7 +210,11 @@ def parse_upload(raw: bytes, filename: str, branch_code: str | None = None) -> p
 
 def save_month(branch_code: str, period, rows: pd.DataFrame) -> int:
     """Replace one (branch_code, period)'s rows in MonthlySalesLine. Returns
-    the number of line rows saved."""
+    the number of line rows saved. A single bulk INSERT (not one row at a
+    time) - this matters a lot once the target is a remote database instead
+    of local SQLite: hundreds of individual round trips per file adds up to
+    minutes per file, a bulk statement is one round trip regardless of size."""
+    from sqlalchemy import insert
     from wms.db import SessionLocal
     from wms.models import MonthlySalesLine
 
@@ -220,16 +224,17 @@ def save_month(branch_code: str, period, rows: pd.DataFrame) -> int:
         db.query(MonthlySalesLine).filter(
             MonthlySalesLine.branch_code == branch_code,
             MonthlySalesLine.period == period_date).delete()
-        n = 0
-        for r in rows.itertuples():
-            db.add(MonthlySalesLine(
-                branch_code=branch_code, sku=r.sku, item=r.item,
-                period=period_date,
-                qty=float(r.qty), turnover=float(r.turnover or 0),
-                profit=(float(r.profit) if pd.notna(r.profit) else None),
-                gp_pct=(float(r.gp_pct) if pd.notna(r.gp_pct) else None),
-                day_from=int(r.day_from), day_to=int(r.day_to)))
-            n += 1
+        values = [{
+            "branch_code": branch_code, "sku": r.sku, "item": r.item,
+            "period": period_date,
+            "qty": float(r.qty), "turnover": float(r.turnover or 0),
+            "profit": (float(r.profit) if pd.notna(r.profit) else None),
+            "gp_pct": (float(r.gp_pct) if pd.notna(r.gp_pct) else None),
+            "day_from": int(r.day_from), "day_to": int(r.day_to),
+        } for r in rows.itertuples()]
+        n = len(values)
+        if values:
+            db.execute(insert(MonthlySalesLine), values)
         db.commit()
         return n
     finally:

@@ -206,7 +206,9 @@ def save_week(branch_code: str, week_start, rows: pd.DataFrame) -> int:
     """Replace one (branch, week)'s REAL rows in WeeklySalesLine (never
     touches simulated ones - weekly_simulate.regenerate() cleans those up
     wholesale right after a real upload, once it can see the new coverage).
-    Returns the number of line rows saved."""
+    Returns the number of line rows saved. A single bulk INSERT, not one row
+    at a time - matters a lot once the target is a remote database."""
+    from sqlalchemy import insert
     from wms.db import SessionLocal
     from wms.models import WeeklySalesLine
 
@@ -217,13 +219,14 @@ def save_week(branch_code: str, week_start, rows: pd.DataFrame) -> int:
             WeeklySalesLine.branch_code == branch_code,
             WeeklySalesLine.week_start == week_date,
             WeeklySalesLine.is_simulated.is_(False)).delete()
-        n = 0
-        for r in rows.itertuples():
-            db.add(WeeklySalesLine(
-                branch_code=branch_code, sku=r.sku, item=r.item, week_start=week_date,
-                qty=float(r.qty), profit=float(r.profit), revenue=float(r.revenue),
-                is_simulated=False))
-            n += 1
+        values = [{
+            "branch_code": branch_code, "sku": r.sku, "item": r.item,
+            "week_start": week_date, "qty": float(r.qty), "profit": float(r.profit),
+            "revenue": float(r.revenue), "is_simulated": False,
+        } for r in rows.itertuples()]
+        n = len(values)
+        if values:
+            db.execute(insert(WeeklySalesLine), values)
         db.commit()
         return n
     finally:
@@ -251,20 +254,23 @@ def clear_simulated_weeks() -> int:
 def save_simulated_week(branch_code: str, week_start, rows: pd.DataFrame) -> int:
     """Insert one (branch, week)'s SIMULATED rows into WeeklySalesLine. Call
     clear_simulated_weeks() once before a batch of these, not per-call - the
-    simulated set is always rebuilt wholesale, not incrementally."""
+    simulated set is always rebuilt wholesale, not incrementally. A single
+    bulk INSERT, not one row at a time."""
+    from sqlalchemy import insert
     from wms.db import SessionLocal
     from wms.models import WeeklySalesLine
 
     week_date = pd.Timestamp(week_start).date()
     db = SessionLocal()
     try:
-        n = 0
-        for r in rows.itertuples():
-            db.add(WeeklySalesLine(
-                branch_code=branch_code, sku=r.sku, item=r.item, week_start=week_date,
-                qty=float(r.qty), profit=float(r.profit), revenue=float(r.revenue),
-                is_simulated=True))
-            n += 1
+        values = [{
+            "branch_code": branch_code, "sku": r.sku, "item": r.item,
+            "week_start": week_date, "qty": float(r.qty), "profit": float(r.profit),
+            "revenue": float(r.revenue), "is_simulated": True,
+        } for r in rows.itertuples()]
+        n = len(values)
+        if values:
+            db.execute(insert(WeeklySalesLine), values)
         db.commit()
         return n
     finally:
@@ -382,7 +388,9 @@ def parse_upload_inventory(raw: bytes, filename: str, branch_code: str | None = 
 
 def save_inventory_week(branch_code: str, week_start, rows: pd.DataFrame) -> int:
     """Replace one (branch, week)'s rows in WeeklyStockSnapshotLine. Returns
-    the number of line rows saved."""
+    the number of line rows saved. A single bulk INSERT, not one row at a
+    time - matters a lot once the target is a remote database."""
+    from sqlalchemy import insert
     from wms.db import SessionLocal
     from wms.models import WeeklyStockSnapshotLine
 
@@ -392,12 +400,13 @@ def save_inventory_week(branch_code: str, week_start, rows: pd.DataFrame) -> int
         db.query(WeeklyStockSnapshotLine).filter(
             WeeklyStockSnapshotLine.branch_code == branch_code,
             WeeklyStockSnapshotLine.week_start == week_date).delete()
-        n = 0
-        for r in rows.itertuples():
-            db.add(WeeklyStockSnapshotLine(
-                branch_code=branch_code, sku=r.sku, week_start=week_date,
-                qty_on_hand=float(r.qty_on_hand)))
-            n += 1
+        values = [{
+            "branch_code": branch_code, "sku": r.sku, "week_start": week_date,
+            "qty_on_hand": float(r.qty_on_hand),
+        } for r in rows.itertuples()]
+        n = len(values)
+        if values:
+            db.execute(insert(WeeklyStockSnapshotLine), values)
         db.commit()
         return n
     finally:
