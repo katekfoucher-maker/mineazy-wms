@@ -10,7 +10,9 @@ from wms.analytics import demand_forecast as dfc
 
 
 @pytest.fixture(scope="module")
-def panel():
+def panel(seeded):
+    # load_panel() merges in any DB-only historical months, so the DB schema
+    # must exist before it runs
     p = ms.load_panel()
     if p.empty:
         pytest.skip("no sales_history files present")

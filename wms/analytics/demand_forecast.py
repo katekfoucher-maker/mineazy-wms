@@ -334,13 +334,10 @@ _CACHE: dict = {}
 
 
 def cached_run() -> dict:
-    """run(), memoised on the set + mtimes of the source files."""
-    d = monthly_sales.history_dir()
-    try:
-        sig = tuple(sorted((p.name, p.stat().st_mtime)
-                           for p in d.glob("*.xls*") if not p.name.startswith("~$")))
-    except OSError:
-        sig = ()
+    """run(), memoised on the current monthly-data signature (local files if
+    there are any, else a database fingerprint - see
+    monthly_sales.data_signature)."""
+    sig = monthly_sales.data_signature()
     if _CACHE.get("sig") != sig:
         _CACHE["sig"] = sig
         _CACHE["val"] = run()

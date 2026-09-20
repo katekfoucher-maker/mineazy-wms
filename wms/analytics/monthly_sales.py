@@ -32,8 +32,27 @@ _BRANCH_DEFS = [
     ("MP", "Maphisa"), ("TG", "Tongogara"), ("ZMA", "Zambia"),
 ]
 _BRANCHES = {c: (c, n) for c, n in _BRANCH_DEFS}
-_BRANCHES.update({"BELMONT": ("BM", "Belmont Shop"), "GWANDA": ("GWA", "Gwanda VID"),
-                  "VID": ("GWA", "Gwanda VID"), "GWANDA VID": ("GWA", "Gwanda VID")})
+_BRANCHES.update({
+    "BELMONT": ("BM", "Belmont Shop"),
+    "GWANDA": ("GWA", "Gwanda VID"), "VID": ("GWA", "Gwanda VID"),
+    "GWANDA VID": ("GWA", "Gwanda VID"),
+    # full display-name tokens for the branches whose backup folders/files
+    # spell out the name rather than the short Hansa code
+    "ESIGODINI": ("ES", "Esigodini"),
+    "GWERU": ("GW", "Gweru"),
+    "MAPHISA": ("MP", "Maphisa"),
+    "TONGOGARA": ("TG", "Tongogara"),
+    "ZAMBIA": ("ZMA", "Zambia"),
+    "JUNKSHOP": ("JS", "Junkshop"),
+    "BOTSWANA": ("BTA", "Botswana"),
+    # "Filabusi" alone is ambiguous across 4 branches - the filenames spell
+    # out which one ("FILABUSI MTHWAKAZI SALES.xlsx"), so key off that second,
+    # unambiguous word instead; bare "FILABUSI" is deliberately not mapped
+    "MTHWAKAZI": ("FLM", "Filabusi Mthwakazi"),
+    "MSWELA": ("FL", "Filabusi Mswela"),
+    "WAREHOUSE": ("FWH", "Filabusi Warehouse"),
+    "MAIN": ("FMS", "Filabusi Main Shop"),
+})
 BRANCH_NAME = {c: n for c, n in _BRANCH_DEFS}          # code -> display name
 _MONTHS = {
     "JAN": 1, "JANUARY": 1, "FEB": 2, "FEBRUARY": 2, "MAR": 3, "MARCH": 3,
@@ -68,6 +87,91 @@ def history_dir() -> Path:
     return p
 
 
+def data_signature() -> tuple:
+    """A fingerprint of the CURRENT monthly sales data, for cache-busting
+    demand_forecast.cached_run(). Uses local file names+mtimes when there are
+    any (same as the original design - unaffected locally/in tests); falls
+    back to a database fingerprint (row count + latest update) when there are
+    none, which is what a real deploy - or a direct DB import that never
+    touched a file - actually has."""
+    d = history_dir()
+    try:
+        files = tuple(sorted((p.name, p.stat().st_mtime)
+                             for p in d.glob("*.xls*") if not p.name.startswith("~$")))
+    except OSError:
+        files = ()
+    if files:
+        return files
+    from sqlalchemy import func
+    from wms.db import SessionLocal
+    from wms.models import MonthlySalesLine
+    db = SessionLocal()
+    try:
+        n = db.query(func.count(MonthlySalesLine.id)).scalar() or 0
+        mx = db.query(func.max(MonthlySalesLine.updated_at)).scalar()
+    finally:
+        db.close()
+    return ("db", int(n), mx.isoformat() if mx else None)
+
+
+def short_month(lab: str) -> str:
+    """A month-end period label -> ``"Apr 2025"``. Unlike weekly_forecast's
+    ``_short_week`` this always carries the year - months repeat across the
+    (multi-year) monthly history, so "Apr" alone would be ambiguous between
+    e.g. 2025 and 2026."""
+    try:
+        return pd.Timestamp(lab).strftime("%b %Y")
+    except Exception:
+        return lab
+
+
+_MATRIX_PANEL_CACHE: dict = {}
+
+
+def cached_matrix_panel() -> dict:
+    """The monthly sales panel reshaped into the same
+    ``{MAT, PROFIT, REV, keys, weeks, item_of}`` matrix shape
+    ``weekly_forecast.cached_panel()`` returns (series x period, one row per
+    (branch, sku)), memoised on :func:`data_signature`. Flow Analysis uses
+    this in place of the weekly panel wherever a branch has no real weekly
+    upload history yet - real monthly totals, never a fabricated weekly
+    split. The dict key stays ``"weeks"`` (not "periods") purely so it drops
+    straight into the weekly chart/KPI helpers unchanged. Distinct from the
+    plain-DataFrame :func:`cached_panel` used elsewhere (exports, reports)."""
+    sig = data_signature()
+    if _MATRIX_PANEL_CACHE.get("sig") == sig:
+        return _MATRIX_PANEL_CACHE["val"]
+    val = _build_matrix_panel()
+    _MATRIX_PANEL_CACHE["sig"], _MATRIX_PANEL_CACHE["val"] = sig, val
+    return val
+
+
+def _build_matrix_panel() -> dict:
+    panel = load_panel()
+    empty = {"MAT": np.zeros((0, 0), np.float32), "PROFIT": np.zeros((0, 0), np.float32),
+             "REV": np.zeros((0, 0), np.float32), "keys": [], "weeks": [], "item_of": {}}
+    if panel.empty:
+        return empty
+    periods = sorted(panel["period"].unique())
+    p_ix = {p: i for i, p in enumerate(periods)}
+    keys = sorted(set(zip(panel["branch_code"], panel["sku"])))
+    k_ix = {k: i for i, k in enumerate(keys)}
+    MAT = np.zeros((len(keys), len(periods)), np.float32)
+    PROFIT = np.zeros((len(keys), len(periods)), np.float32)
+    REV = np.zeros((len(keys), len(periods)), np.float32)
+    item_of: dict = {}
+    for r in panel.itertuples():
+        i, j = k_ix[(r.branch_code, r.sku)], p_ix[r.period]
+        MAT[i, j] += float(r.qty or 0.0)
+        REV[i, j] += float(r.turnover or 0.0)
+        if r.profit is not None:
+            PROFIT[i, j] += float(r.profit)
+        item_of[(r.branch_code, r.sku)] = r.item
+    weeks = [pd.Timestamp(p).date().isoformat() for p in periods]
+    return {"MAT": MAT, "PROFIT": PROFIT, "REV": REV, "keys": keys,
+            "weeks": weeks, "item_of": item_of}
+
+
 # ---------------------------------------------------------------- categories
 _CAT_RULES = [
     ("Cable & Electrical", r"CABLE|ELECTRIC|BREAKER|CONTACTOR|STARTER|ALTERNATOR|RECTIFIER|GENERATOR|SWITCH|SOCKET|LAMP|TORCH|WIRE ARMOUR"),
@@ -94,14 +198,29 @@ def categorise(name: str) -> str:
 
 # ---------------------------------------------------------------- parsing
 def _parse_name(fname: str):
+    """-> (month, branch, year). ``year`` is the 4-digit year token in the
+    filename (e.g. "JULY 2025 BELMONT SALES.xlsx") if there is one, else
+    ``None`` - the older upload convention has no year in the name at all and
+    falls back to ``_DEFAULT_YEAR``, see ``_read_file``/``parse_upload``."""
     toks = re.split(r"[\s_.-]+", os.path.basename(fname).upper())
-    month = branch = None
-    for t in toks:
+    month = branch = year = None
+    for i, t in enumerate(toks):
         if month is None and t in _MONTHS:
             month = _MONTHS[t]
-        if branch is None and t in _BRANCHES:
-            branch = _BRANCHES[t]
-    return month, branch
+        if branch is None:
+            # "ESIGODINI 2" / "GWANDA THOBELANI" are DIFFERENT branches from
+            # bare "ESIGODINI" / "GWANDA" - the single-token match below would
+            # otherwise resolve them on the first word alone, before ever
+            # seeing the disambiguating second word
+            if t == "ESIGODINI" and i + 1 < len(toks) and toks[i + 1] == "2":
+                branch = ("ES2", "Esigodini 2")
+            elif t == "GWANDA" and i + 1 < len(toks) and toks[i + 1] == "THOBELANI":
+                branch = ("GWT", "Gwanda Thobelani")
+            elif t in _BRANCHES:
+                branch = _BRANCHES[t]
+        if year is None and re.fullmatch(r"(19|20)\d{2}", t):
+            year = int(t)
+    return month, branch, year
 
 
 _PANEL_COLUMNS = ["branch_code", "branch", "sku", "item", "category", "period",
@@ -113,7 +232,7 @@ def _read_file(f: str) -> pd.DataFrame:
     """One file -> rows with columns sku, item, qty, turnover, profit, gp_pct,
     branch_code, branch, period, month_label, day_from, day_to. Empty frame if
     the filename doesn't carry a recognised month + branch."""
-    month, branch = _parse_name(f)
+    month, branch, year = _parse_name(f)
     if not month or not branch:
         return pd.DataFrame()
     try:
@@ -133,7 +252,7 @@ def _read_file(f: str) -> pd.DataFrame:
     raw["gp_pct"] = pd.to_numeric(raw[gcol], errors="coerce") if gcol else None
     raw["profit"] = pd.to_numeric(raw[pcol], errors="coerce") if pcol else None
     code, disp = branch
-    period = pd.Timestamp(year=_DEFAULT_YEAR, month=month, day=1) + pd.offsets.MonthEnd(0)
+    period = pd.Timestamp(year=year or _DEFAULT_YEAR, month=month, day=1) + pd.offsets.MonthEnd(0)
     day_from, day_to = _parse_day_range(f) or (1, int(period.day))
     day_to = min(day_to, int(period.day))
     out = raw[["sku", "item", "qty", "turnover", "profit", "gp_pct"]].copy()
@@ -170,7 +289,7 @@ def parse_upload(raw: bytes, filename: str, branch_code: str | None = None) -> p
     ``branch_code`` is given explicitly (the upload form lets the user pick
     the branch, so the filename itself only has to carry the month)."""
     import io
-    month, branch = _parse_name(filename)
+    month, branch, year = _parse_name(filename)
     if not month:
         return pd.DataFrame()
     if branch_code:
@@ -195,7 +314,7 @@ def parse_upload(raw: bytes, filename: str, branch_code: str | None = None) -> p
     raw_df["gp_pct"] = pd.to_numeric(raw_df[gcol], errors="coerce") if gcol else None
     raw_df["profit"] = pd.to_numeric(raw_df[pcol], errors="coerce") if pcol else None
     code, disp = branch
-    period = pd.Timestamp(year=_DEFAULT_YEAR, month=month, day=1) + pd.offsets.MonthEnd(0)
+    period = pd.Timestamp(year=year or _DEFAULT_YEAR, month=month, day=1) + pd.offsets.MonthEnd(0)
     day_from, day_to = _parse_day_range(filename) or (1, int(period.day))
     day_to = min(day_to, int(period.day))
     out = raw_df[["sku", "item", "qty", "turnover", "profit", "gp_pct"]].copy()
@@ -279,17 +398,29 @@ def load_panel(directory: str | os.PathLike | None = None) -> pd.DataFrame:
     knows the qty covers only part of the month.
 
     Reads uploaded Excel files under ``directory`` (or the configured
-    ``sales_history_dir``) when there are any there - the on-disk path this
-    always used to take, still used by tests that populate a directory
-    directly. Falls back to MonthlySalesLine in the database otherwise, which
-    is what a real deploy with no local filesystem to speak of actually has.
+    ``sales_history_dir``) - the on-disk path this always used to take, still
+    used by tests that populate a directory directly. These files only ever
+    hold the most recent few months (whatever has been hand-dropped/uploaded
+    since); any OLDER (branch, month) the local files don't cover - e.g. a
+    bulk historical import that went straight to the database and never wrote
+    a file - is pulled in from MonthlySalesLine and merged in, so imported
+    history is never silently shadowed by a handful of recent local files.
     """
     d = Path(directory) if directory else history_dir()
     files = sorted(glob.glob(str(d / "*.xls*")))
     files = [f for f in files if not os.path.basename(f).startswith("~$")]
-    if not files:
-        return _load_panel_from_db()
-    return _finish_panel([_read_file(f) for f in files])
+    file_panel = _finish_panel([_read_file(f) for f in files]) if files else pd.DataFrame(columns=_PANEL_COLUMNS)
+    db_panel = _load_panel_from_db()
+    if file_panel.empty:
+        return db_panel
+    if db_panel.empty:
+        return file_panel
+    covered = set(zip(file_panel["branch_code"], file_panel["period"]))
+    extra = db_panel[~db_panel.apply(lambda r: (r["branch_code"], r["period"]) in covered, axis=1)]
+    if extra.empty:
+        return file_panel
+    return (pd.concat([file_panel, extra], ignore_index=True)
+              .sort_values(["branch_code", "sku", "period"]).reset_index(drop=True))
 
 
 def coverage(panel: pd.DataFrame) -> dict:

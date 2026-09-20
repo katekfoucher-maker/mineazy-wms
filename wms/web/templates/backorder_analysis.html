@@ -153,7 +153,7 @@
     </p>
   {% endif %}
   {% else %}
-  <p class="muted">No {{ mix.metric_label }} for this selection, or no weekly
+  <p class="muted">No {{ mix.metric_label }} for this selection, or no
     sales history yet.</p>
   {% endif %}
 </div>
@@ -185,7 +185,7 @@
 
 {% if sales_series and sales_series.has_data %}
 {% set g = sales_series.svg %}
-{% set _title = 'Weekly inventory' if fa_metric == 'inventory' else ('Weekly sales + inventory' if fa_metric == 'both' else 'Weekly sales') %}
+{% set _title = 'Monthly inventory' if fa_metric == 'inventory' else ('Monthly sales + inventory' if fa_metric == 'both' else 'Monthly sales') %}
 <div class="card" id="sales-chart-card">
   <div class="card-head">
     <h3>{{ _title }} ({{ sales_series.branch_label }}, {{ sales_series.sku_label }})</h3>
@@ -237,20 +237,20 @@
   <p class="muted sales-readout" style="margin:6px 0 0">
     {% if fa_metric == 'both' %}
       <span style="color:var(--brand)">&#9632;</span> sales &nbsp;
-      <span style="color:var(--ink)">&#9632;</span> on hand (dashed). Click a point for its week.
+      <span style="color:var(--ink)">&#9632;</span> on hand (dashed). Click a point for its month.
     {% else %}
-      Click a point to see its week.
+      Click a point to see its month.
     {% endif %}
     {% if fa_metric == 'inventory' %}
       {%- if sales_series.inv_available %}
-        Peak {{ '{:,}'.format(sales_series.inv_peak) }} on hand in a week over
-        {{ sales_series.n_weeks }} weeks{% if not sku %}, {{ sales_series.n_skus }} products{% endif %}.
-      {%- else %} No weekly stock readings for this filter.{% endif %}
+        Peak {{ '{:,}'.format(sales_series.inv_peak) }} on hand in a month over
+        {{ sales_series.n_weeks }} months{% if not sku %}, {{ sales_series.n_skus }} products{% endif %}.
+      {%- else %} No weekly stock readings available for the monthly view.{% endif %}
     {% else %}
-      {{ '{:,}'.format(sales_series.total) }} units over {{ sales_series.n_weeks }} weeks,
-      peak {{ '{:,}'.format(sales_series.peak) }} in a week
+      {{ '{:,}'.format(sales_series.total) }} units over {{ sales_series.n_weeks }} months,
+      peak {{ '{:,}'.format(sales_series.peak) }} in a month
       {%- if not sku %}, {{ sales_series.n_skus }} products{% endif %}
-      {%- if fa_metric == 'both' and not sales_series.inv_available %}. No weekly stock readings loaded{% endif %}
+      {%- if fa_metric == 'both' and not sales_series.inv_available %}. No weekly stock readings available for the monthly view{% endif %}
       {%- if sales_series.total == 0 %}. No recorded sales for this filter{% endif %}.
     {% endif %}
   </p>
@@ -367,7 +367,7 @@
 {% macro worst_card(title, rows, weeks, sub, show_bars=true) %}
 <div class="card worst">
   <div class="card-head"><h3>{{ title }}
-    {% if weeks %}<span class="mini">last {{ weeks }} weeks</span>{% endif %}</h3></div>
+    {% if weeks %}<span class="mini">last {{ weeks }} months</span>{% endif %}</h3></div>
   {% if not rows %}
     <p class="muted">Nothing to flag here. This needs a branch stock-on-hand
       upload (on the Demand forecast tab); a branch with no inventory snapshot
@@ -399,7 +399,7 @@
         <div class="worst-stock">
           <span class="oh">{{ '{:,}'.format(r.on_hand) }}</span><span class="oh-l">on hand</span>
           <span class="cover {{ 'hi' if (r.cover is none or r.cover >= 26) }}">
-            {%- if r.cover is none %}never sold{% else %}{{ r.cover }} wk of cover{% endif -%}
+            {%- if r.cover is none %}never sold{% else %}{{ r.cover }} mo of cover{% endif -%}
           </span>
           {% if r.dead %}<span class="worst-flag">dead stock</span>{% endif %}
         </div>
@@ -412,7 +412,7 @@
 
 {% if growth.has_data %}
 <div class="card growth-bar-card">
-  <div class="card-head"><h3>Sales growth (week over week)</h3></div>
+  <div class="card-head"><h3>Sales growth (month over month)</h3></div>
   <form class="inline" method="get" style="margin:0 0 10px">
     <div style="min-width:200px"><label>Branch</label>
       <select name="growth_bcode" onchange="this.form.requestSubmit()">
@@ -433,7 +433,7 @@
       {% set pt = growth.sales_growth.points[loop.index0] %}
       <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"
             fill="{{ '#0f7b3d' if b.pos else '#c0392b' }}" rx="2">
-        <title>{{ pt.label }}: {% if pt.pct is not none %}{{ pt.pct }}%{% else %}no prior week to compare{% endif %}
+        <title>{{ pt.label }}: {% if pt.pct is not none %}{{ pt.pct }}%{% else %}no prior month to compare{% endif %}
           &middot; {{ '{:,}'.format(pt.value) }} units</title>
       </rect>
       {% if pt.pct is not none %}
@@ -446,9 +446,9 @@
     {% endfor %}
   </svg>
   </div>
-  <p class="mini muted" style="margin:8px 0 0">% change in units sold vs the prior week
-    ({{ growth.sales_growth.branch_label }}), last {{ growth.n_weeks }} weeks &mdash; green rises,
-    red falls, each bar labelled with its own change and week.</p>
+  <p class="mini muted" style="margin:8px 0 0">% change in units sold vs the prior month
+    ({{ growth.sales_growth.branch_label }}), last {{ growth.n_weeks }} months &mdash; green rises,
+    red falls, each bar labelled with its own change and month.</p>
 </div>
 {% endif %}
 
@@ -612,14 +612,14 @@ var BRANCH_ID_BY_CODE = { {% for b in branches %}"{{ b.code|upper }}": {{ b.id }
     if (e.target && e.target.id === 'product-history-modal') window.closeProductHistory();
   });
 
-  // click a line-chart point -> show its week (delegated)
+  // click a line-chart point -> show its month (delegated)
   document.addEventListener('click', function(e){
     var hit = e.target.closest && e.target.closest('circle[data-week]');
     if (!hit) return;
     var card = hit.closest('.card');
     var out  = card && card.querySelector('.sales-readout');
     var unit = hit.getAttribute('data-unit') || 'units';
-    if (out) out.textContent = 'Week of ' + hit.getAttribute('data-week') + ': '
+    if (out) out.textContent = hit.getAttribute('data-week') + ': '
       + Number(hit.getAttribute('data-value')).toLocaleString() + ' ' + unit;
     hit.closest('svg').querySelectorAll('circle[data-week][fill]').forEach(function(c){
       c.setAttribute('r', c === hit ? '5.5' : '3');

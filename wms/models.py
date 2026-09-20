@@ -7,9 +7,10 @@ audit.  There is no stock ledger - see README ("remove inventory module").
 from __future__ import annotations
 
 from sqlalchemy import (
-    Boolean, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric,
-    String, Text, UniqueConstraint,
+    Boolean, Column, Date, DateTime, ForeignKey, Index, Integer, LargeBinary,
+    Numeric, String, Text, UniqueConstraint,
 )
+from sqlalchemy.dialects.mysql import LONGBLOB
 from sqlalchemy.orm import relationship
 
 from wms.db import TimestampedBase
@@ -450,3 +451,24 @@ class AuditLog(TimestampedBase):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     user = relationship("User", lazy="joined")
+
+
+# ======================================================================
+# WEEKLY FORECAST MODEL CHECKPOINTS
+#   The trained network/booster weights used to live only as files under
+#   output/ - invisible on a host with no persistent disk, same problem as
+#   the file-based analytics data above. One row per named artifact
+#   (esrnn_ratio, gbm, lgbm, blend, model_choice); latest save wins.
+# ======================================================================
+class ModelCheckpoint(TimestampedBase):
+    __tablename__ = "model_checkpoints"
+    __table_args__ = (UniqueConstraint("name", name="uq_model_checkpoint_name"),)
+
+    name = Column(String(50), nullable=False)
+    # binary weights (torch state dict, xgboost/lightgbm native format) - None
+    # for the text-only "model_choice" row
+    data = Column(LargeBinary().with_variant(LONGBLOB, "mysql"), nullable=True)
+    # JSON meta: trained_at, n_series, n_weeks, branches, the data signature
+    # it was trained on (for the "stale vs current data" check)
+    meta_json = Column(Text, nullable=True)
+    text_value = Column(String(80), nullable=True)   # model_choice's pinned model name

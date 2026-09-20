@@ -231,6 +231,11 @@ def test_train_and_save_checkpoint(tmp_path, monkeypatch):
     pytest.importorskip("torch")
     _make_panel(tmp_path, n_weeks=19)
     monkeypatch.setattr(wf, "weekly_dir", lambda: tmp_path)
+    # this test specifically exercises the ES-RNN ratio network, which
+    # train_and_save() otherwise skips - the suite disables it globally
+    # (conftest's WEEKLY_ESRNN=false) so the rest of the suite stays fast
+    monkeypatch.setattr(wf.get_settings(), "weekly_esrnn", True, raising=False)
+    monkeypatch.setattr(wf.get_settings(), "weekly_esrnn_ratio", True, raising=False)
     wf._PANEL_CACHE.clear(); wf._CKPT_CACHE.clear(); wf._BW_CACHE.clear()
 
     # no checkpoint yet
@@ -726,9 +731,6 @@ def test_upload_weekly_route(tmp_path, monkeypatch, seeded):
     from wms.web import routes as wr
 
     monkeypatch.setattr(wr.weekly_fc, "weekly_dir", lambda: tmp_path)
-    # the route also regenerates simulated weeks from monthly history - isolate
-    # that from the project's real monthly data too, so this stays a pure test
-    # of the weekly-upload route
     monkeypatch.setattr(wr.monthly_sales, "history_dir", lambda: tmp_path / "no-monthly")
     wr.weekly_fc._CACHE.clear()
 

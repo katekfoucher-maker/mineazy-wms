@@ -63,6 +63,7 @@ _ADDED_COLUMNS = {
     "back_orders": {"cycle": "VARCHAR(12) NOT NULL DEFAULT 'WEEKLY'",
                     "period_start": "DATE"},
     "sales_records": {"source_ref": "VARCHAR(50)"},
+    "weekly_sales_lines": {"is_simulated": "BOOLEAN NOT NULL DEFAULT 0"},
 }
 
 # one-off value fixes after create_all (idempotent)

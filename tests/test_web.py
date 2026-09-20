@@ -64,7 +64,7 @@ def test_flow_analysis_sections(web):
     assert "<h1>Flow Analysis</h1>" in r.text or ">Flow Analysis<" in r.text
     assert "Worst performing products, overall" in r.text
     # revenue + gross margin live in the KPI strip here, not a separate page
-    if "Revenue, last week" in r.text:
+    if "Revenue, last month" in r.text:
         assert "Gross margin" in r.text
     assert web.get("/revenue").status_code == 404       # standalone Revenue page removed
     # growth: KPIs + chart live here too, not a separate page
@@ -77,7 +77,7 @@ def test_flow_analysis_sections(web):
         assert "Active products, weekly" not in r.text
         assert "Active branches, weekly" not in r.text
         # Sales growth now sits directly above the worst-performers card
-        assert (r.text.index("Sales growth (week over week)")
+        assert (r.text.index("Sales growth (month over month)")
                 < r.text.index("Worst performing products, overall"))
     assert web.get("/growth").status_code == 404         # standalone Growth page removed
     # responsive layout guard: bare "1fr 1fr" grid columns don't shrink below
@@ -713,10 +713,15 @@ def test_new_dispatch_form_fields(web):
     assert web.get("/backorders/new").status_code == 200
 
 
-def test_dispatch_confirm_adds_stock_and_folds_into_weekly_back_order(web, db):
+def test_dispatch_confirm_adds_stock_no_back_order(web, db):
+    """Dispatch no longer computes/raises a back order at all (that
+    calculation was retired) - it only records the delivery note and moves
+    stock. The note's own requested-vs-sent-vs-shortfall is still shown on
+    its detail page, just without ever creating a BackOrder row."""
     from wms.services import stock as stock_svc
-    from wms.models import Branch
+    from wms.models import Branch, BackOrder
     gwa_id = db.query(Branch).filter(Branch.code == "GWA").first().id
+    n_bo_before = db.query(BackOrder).count()
     _login(web, "controller")
     csv = ("Stock Movement,,,SM-UP-9\nTo Location,,Gwanda VID\nDate,,15/07/2026\n\n"
            "Item No,Req. Qty,Description,Sent Qty\n"
@@ -738,20 +743,17 @@ def test_dispatch_confirm_adds_stock_and_folds_into_weekly_back_order(web, db):
         "sent_qty": ["40", "", "10"],
     }, follow_redirects=True)
     assert r.status_code == 200
-    # landed on the weekly back-order detail; 2026-07-15 is ISO week 29, branch 9 = GWA
-    assert "BO-GWA-2026W29" in r.text
-    assert "week 29" in r.text
-    assert "cycle Monthly" in r.text                       # cycle persisted
-    assert "requested vs sent" in r.text
-    for col in ("<th>Requested</th>", "<th>Sent</th>", "<th>Back order</th>"):
-        assert col in r.text
+    # landed on the delivery note itself, not a back order
+    assert "SM-UP-9" in r.text
+    assert "Requested" in r.text and "Sent" in r.text and "Backorder" in r.text
+    assert db.query(BackOrder).count() == n_bo_before      # no back order raised
 
     # dispatched units are on the branch balance: 40 + 0 + 10
     lv = stock_svc.levels_df(db).set_index(["branch_code", "sku"])["on_hand"]
     assert lv.get(("GWA", "SFC1269")) == 40
     assert lv.get(("GWA", "SFC1276")) == 10
 
-    # a second dispatch in the SAME week merges into the same weekly back order
+    # a second dispatch is its own independent delivery note
     r2 = web.post("/dispatch/new", data={
         "branch_id": str(gwa_id), "stock_movement_id": "SM-UP-10", "doc_date": "2026-07-17",
         "cycle": "WEEKLY", "notes": "",
@@ -759,19 +761,17 @@ def test_dispatch_confirm_adds_stock_and_folds_into_weekly_back_order(web, db):
         "requested_qty": ["30"], "sent_qty": ["5"],   # short 25
     }, follow_redirects=True)
     assert r2.status_code == 200
-    assert "BO-GWA-2026W29" in r2.text
-    assert "SM-UP-9" in r2.text and "SM-UP-10" in r2.text   # both dispatch notes listed
-    # SFC1269 short: 60 (first) + 25 (second) merged onto one line
+    assert "SM-UP-10" in r2.text
+    assert db.query(BackOrder).count() == n_bo_before      # still none
     lv2 = stock_svc.levels_df(db).set_index(["branch_code", "sku"])["on_hand"]
     assert lv2.get(("GWA", "SFC1269")) == 45              # 40 + 5
 
     # tidy the shared seeded DB
-    from wms.models import BackOrder, Branch, DeliveryNote, StockOnHand
+    from wms.models import DeliveryNote, StockOnHand
     gwa = db.query(Branch).filter(Branch.code == "GWA").first().id
     db.query(StockOnHand).filter(StockOnHand.branch_id == gwa).delete()
-    for m in (BackOrder, DeliveryNote):
-        for row in db.query(m).filter(m.branch_id == gwa).all():
-            db.delete(row)
+    for row in db.query(DeliveryNote).filter(DeliveryNote.branch_id == gwa).all():
+        db.delete(row)
     db.commit()
 
 
@@ -813,22 +813,21 @@ def test_upload_pdf_stock_movement_prefills_form(web):
     assert 'selected' in r.text and "Gwanda VID" in r.text
 
 
-def test_clerk_can_enter_controller_closes(web):
-    _login(web, "clerk")
-    r = web.post("/dispatch/new", data={
-        "branch_id": "3", "stock_movement_id": "SM-CLERK-1", "doc_date": "2026-07-20",
-        "sku": "SFC1276", "description": "", "requested_qty": "20", "sent_qty": "0",
-    }, follow_redirects=False)
-    assert r.status_code == 303
-    bo_no = r.headers["location"].rsplit("/", 1)[-1]
+def test_clerk_can_enter_controller_closes(web, db):
+    # dispatch no longer raises a back order, so seed one directly (the
+    # manual creation path - still very much part of the project) to exercise
+    # the stage-advance permission check
+    from wms.services import backorder_entry as bo_svc
+    bo = bo_svc.create_back_order(db, branch_id=3, items=[{"sku": "SFC1276", "qty": 20}])
 
+    _login(web, "clerk")
     # clerk cannot advance the stage
-    r = web.post(f"/backorders/{bo_no}/advance", data={"to_stage": "CLOSED"},
+    r = web.post(f"/backorders/{bo.bo_no}/advance", data={"to_stage": "CLOSED"},
                  follow_redirects=False)
     assert r.status_code == 303
 
     _login(web, "controller")
-    r = web.post(f"/backorders/{bo_no}/advance", data={"to_stage": "CLOSED"},
+    r = web.post(f"/backorders/{bo.bo_no}/advance", data={"to_stage": "CLOSED"},
                  follow_redirects=True)
     assert '<span class="pill CLOSED">Closed</span>' in r.text
 

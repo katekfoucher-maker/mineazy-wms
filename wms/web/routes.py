@@ -12,7 +12,7 @@ import sys
 from datetime import date, datetime
 
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 from wms.analytics import loaders, allocation, demand_forecast, inventory as inv_mod
 from wms.analytics import monthly_sales
 from wms.analytics import weekly_forecast as weekly_fc
-from wms.analytics import weekly_simulate
 from wms.analytics import backorders as bo_an          # delivery-note fill analysis
 from wms.enums import (
     CYCLE_LABEL, STAGE_ITEM_QTY, STAGE_LABEL, BackOrderCycle, BackOrderStage,
@@ -153,19 +152,28 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
     worst_branch = worst_branch.strip().upper()
     worst_bcodes = [worst_branch] if worst_branch else []
 
+    # Flow Analysis runs on monthly data by default - real monthly Hansa
+    # exports cover every branch, while real weekly uploads are still only a
+    # few months deep for a handful of branches (see
+    # monthly_sales.cached_matrix_panel docstring). Both panels share the
+    # weekly-forecast helpers' shape, so only the panel/period_fmt passed in
+    # changes.
+    mp = monthly_sales.cached_matrix_panel()
+    mfmt = monthly_sales.short_month
+
     # Power-BI-style KPI strip
-    _fs = weekly_fc.flow_summary()
+    _fs = weekly_fc.flow_summary(panel=mp, period_fmt=mfmt)
     growth_bcode = growth_bcode.strip().upper()
-    _growth = weekly_fc.growth_overview(bcode=growth_bcode)
+    _growth = weekly_fc.growth_overview(bcode=growth_bcode, panel=mp, period_fmt=mfmt)
     kpis = []
     if _fs.get("has_data"):
         kpis += [
-            {"label": "Units sold, last week", "value": f"{_fs['week_units']:,}",
-             "sub": f"week of {_fs['week_label']}", "delta": _fs["wow_pct"],
+            {"label": "Units sold, last month", "value": f"{_fs['week_units']:,}",
+             "sub": _fs['week_label'], "delta": _fs["wow_pct"],
              "good": "up"},
-            {"label": "Revenue, last week",
+            {"label": "Revenue, last month",
              "value": f"{_fs['week_revenue']:,}" if _fs["week_revenue"] is not None else "—",
-             "sub": f"week of {_fs['week_label']}", "delta": _fs["revenue_wow_pct"]},
+             "sub": _fs['week_label'], "delta": _fs["revenue_wow_pct"]},
             {"label": "Gross margin",
              "value": f"{_fs['margin_pct']}%" if _fs["margin_pct"] is not None else "—",
              "sub": "profit / revenue, all-time"},
@@ -179,10 +187,10 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
     if _growth.get("has_data"):
         kpis += [
             {"label": "Active branches", "value": str(_growth["active_branches"]),
-             "sub": "sold something in the latest week"},
+             "sub": "sold something in the latest month"},
             {"label": "Active products", "value": str(_growth["active_products"]),
-             "sub": "distinct SKUs sold in the latest week"},
-            {"label": f"Units sold ({_growth['n_weeks']} wk)",
+             "sub": "distinct SKUs sold in the latest month"},
+            {"label": f"Units sold ({_growth['n_weeks']} mo)",
              "value": f"{_growth['units_period']:,}", "sub": "network-wide"},
             {"label": "Growth",
              "value": f"{_growth['overall_pct_growth']}%"
@@ -201,13 +209,13 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                   ckpt=weekly_fc.checkpoint_status(),
                   fa_metric=(fa_metric or "sales").strip().lower(),
                   sales_series=weekly_fc.weekly_sales_series(
-                      bcode=bcode, sku=sku, metric=fa_metric),
-                  bmix_units=weekly_fc.branch_mix(metric="units", **bmix_kw),
-                  bmix_profit=weekly_fc.branch_mix(metric="profit", **bmix_kw),
-                  mix_units=weekly_fc.sales_mix(metric="units", **pie_kw),
-                  mix_profit=weekly_fc.sales_mix(metric="profit", **pie_kw),
-                  sku_options=weekly_fc.sales_products(),
-                  worst=weekly_fc.worst_performers(db, bcodes=worst_bcodes),
+                      bcode=bcode, sku=sku, metric=fa_metric, panel=mp, period_fmt=mfmt),
+                  bmix_units=weekly_fc.branch_mix(metric="units", panel=mp, **bmix_kw),
+                  bmix_profit=weekly_fc.branch_mix(metric="profit", panel=mp, **bmix_kw),
+                  mix_units=weekly_fc.sales_mix(metric="units", panel=mp, **pie_kw),
+                  mix_profit=weekly_fc.sales_mix(metric="profit", panel=mp, **pie_kw),
+                  sku_options=weekly_fc.sales_products(panel=mp),
+                  worst=weekly_fc.worst_performers(db, bcodes=worst_bcodes, panel=mp),
                   worst_branch=worst_branch,
                   model_scores=weekly_fc.model_scores(),
                   model_options=weekly_fc.model_options())
@@ -371,16 +379,14 @@ def bo_create(request: Request, branch_id: int = Form(...),
             items=[{"sku": ln["sku"], "qty": ln["sent_qty"]} for ln in lines
                    if ln["sent_qty"] > 0],
             user_id=user.id, commit=False)
-        # 3. load the shortfall onto this branch's OPEN back order
-        bo = bo_entry.attach_dispatch(db, dn, user_id=user.id)
-        if cycle in BackOrderCycle._value2member_map_:
-            bo.cycle = cycle
         db.commit()
         short = sum(max(0, ln["requested_qty"] - ln["sent_qty"]) for ln in lines)
-        flash(request, f"{dn.dn_no}: {moved} unit(s) added to {bo.branch.name} stock · "
-                       f"{short} unit(s) loaded onto back order {bo.bo_no}.",
-              "success")
-        return RedirectResponse(f"/backorders/{bo.bo_no}", 303)
+        branch = db.query(Branch).filter(Branch.id == branch_id).first()
+        msg = f"{dn.dn_no}: {moved} unit(s) added to {branch.name if branch else 'branch'} stock."
+        if short:
+            msg += f" {short} unit(s) short of what was requested."
+        flash(request, msg, "success")
+        return RedirectResponse(f"/delivery-notes/{dn.dn_no}", 303)
     except Exception as e:
         db.rollback()
         flash(request, str(e), "error")
@@ -771,7 +777,7 @@ def _alloc_ctx(db, *, bcode: str = "", q: str = "", alloc_sku: str = "",
 
 
 @router.get("/analytics")
-def analytics(request: Request, tab: str = "allocation", branch_id: str = "",
+def analytics(request: Request, tab: str = "", branch_id: str = "",
               bcode: str = "", q: str = "", alloc_sku: str = "", alloc_qty: str = "",
               alloc_branches: list[str] = Query(default_factory=list),
               db: Session = Depends(db_session), user: User = Depends(require_login)):
@@ -1398,7 +1404,7 @@ def analytics_upload(request: Request, kind: str = Form(...),
             bc = branch_code.strip().upper()
             if not bc:
                 raise ValueError("Pick the branch this sales file is for.")
-            month, _ = monthly_sales._parse_name(name)
+            month, _bc, _yr = monthly_sales._parse_name(name)
             if not month:
                 raise ValueError("Name the file with its month, e.g. 'AUGUST SALES.xlsx'.")
             rows = monthly_sales.parse_upload(file.file.read(), name, branch_code=bc)
@@ -1409,17 +1415,11 @@ def analytics_upload(request: Request, kind: str = Form(...),
             n_saved = monthly_sales.save_month(bc, period, rows)
             demand_forecast._CACHE.clear()
             panel = monthly_sales.load_panel()
-            sim = weekly_simulate.regenerate()
             mon_title = period.strftime("%B")
             partial = (day_from, day_to) != (1, int(period.day))
             period_lbl = f"{mon_title} {day_from}-{day_to}" if partial else mon_title
             msg = (f"Sales for {bc} {period_lbl} added ({n_saved} line(s)), history now "
                   f"{monthly_sales.coverage(panel).get('month_range', '')}.")
-            if bc in sim["branches"]:
-                msg += (f" Weekly forecast now also fills the gap with "
-                       f"{sim['weeks_written']} simulated week(s) built from "
-                       f"monthly history, wherever a branch has no real weekly "
-                       f"upload for that month yet.")
             flash(request, msg, "success")
             return RedirectResponse("/analytics?tab=demand", 303)
 
@@ -1430,8 +1430,22 @@ def analytics_upload(request: Request, kind: str = Form(...),
         return RedirectResponse(back, 303)
 
 
+def _retrain_weekly_model_in_background() -> None:
+    """Runs after the upload response is sent (see BackgroundTasks below) - a
+    thorough retrain takes real time (minutes if the neural net is enabled,
+    seconds otherwise), so it must never block the upload request itself.
+    Persists straight into the database (see sync_checkpoints_to_db in
+    weekly_forecast.py) so the trained weights survive a restart on a host
+    with no persistent disk."""
+    try:
+        weekly_fc.train_and_save(quick=True)
+    except Exception as e:                                # noqa: BLE001
+        import warnings
+        warnings.warn(f"weekly auto-retrain failed: {e}")
+
+
 @router.post("/analytics/upload-weekly")
-def analytics_upload_weekly(request: Request,
+def analytics_upload_weekly(request: Request, background_tasks: BackgroundTasks,
                             files: list[UploadFile] = File(...),
                             branch_code: str = Form(""),
                             db: Session = Depends(db_session),
@@ -1462,13 +1476,13 @@ def analytics_upload_weekly(request: Request,
         code, ws, rows = parsed
         weekly_fc.save_week(code, ws, rows)
         saved += 1
-    # real weekly data always wins - drop any simulated week(s) it now covers
-    weekly_simulate.regenerate()
     if saved:
         cov = weekly_fc.cached_run()["coverage"]
+        background_tasks.add_task(_retrain_weekly_model_in_background)
         flash(request, f"{saved} weekly file(s) loaded, model now covers "
                        f"{', '.join(cov.get('branches', []))} over {cov.get('weeks', 0)} "
-                       f"weeks ({cov.get('week_range', '')}).", "success")
+                       f"weeks ({cov.get('week_range', '')}). Retraining in the "
+                       f"background - the improved model will be live shortly.", "success")
     if skipped:
         flash(request, "Skipped: " + "; ".join(skipped[:6])
               + (" …" if len(skipped) > 6 else ""), "error")

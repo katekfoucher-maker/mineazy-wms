@@ -1253,7 +1253,12 @@ def forced_model() -> str:
         v = _model_choice_path().read_text(encoding="utf-8").strip()
         return "" if v in ("", "auto") else v
     except OSError:
-        return str(getattr(get_settings(), "weekly_force_model", "") or "").strip()
+        pass
+    row = _db_get_checkpoint("model_choice")
+    if row is not None and row.text_value:
+        v = row.text_value.strip()
+        return "" if v in ("", "auto") else v
+    return str(getattr(get_settings(), "weekly_force_model", "") or "").strip()
 
 
 def set_forced_model(name: str) -> None:
@@ -1265,6 +1270,7 @@ def set_forced_model(name: str) -> None:
         _model_choice_path().write_text(name or "auto", encoding="utf-8")
     except OSError:
         pass
+    _db_put_checkpoint("model_choice", text_value=name or "auto")
     _CACHE.clear()
 
 
@@ -1287,21 +1293,38 @@ _CKPT_CACHE: dict = {}
 
 def load_ratio_checkpoint():
     """The saved ``esrnn_ratio`` network as ``{"hp", "net_state"}``, or ``None``.
-    Memoised on the file's mtime so it is read from disk at most once per save."""
+    Memoised on the file's mtime so it is read from disk at most once per save.
+    Falls back to the database when there is no local file - a host with no
+    persistent disk always takes this path - memoised on the DB row's own
+    last-updated timestamp instead."""
     p = _ratio_ckpt_path()
     try:
         mt = p.stat().st_mtime
+        cache_key = ("file", mt)
     except OSError:
-        _CKPT_CACHE.clear()
-        return None
-    if _CKPT_CACHE.get("mt") == mt:
+        row = _db_get_checkpoint("esrnn_ratio")
+        if row is None or not row.data:
+            _CKPT_CACHE.clear()
+            return None
+        cache_key = ("db", row.updated_at.isoformat())
+        if _CKPT_CACHE.get("key") == cache_key:
+            return _CKPT_CACHE.get("val")
+        try:
+            import io
+            import torch
+            val = torch.load(io.BytesIO(row.data), map_location="cpu", weights_only=False)
+        except Exception:                                 # noqa: BLE001
+            val = None
+        _CKPT_CACHE["key"], _CKPT_CACHE["val"] = cache_key, val
+        return val
+    if _CKPT_CACHE.get("key") == cache_key:
         return _CKPT_CACHE.get("val")
     try:
         import torch
         val = torch.load(p, map_location="cpu", weights_only=False)
     except Exception:                                     # noqa: BLE001
         val = None
-    _CKPT_CACHE["mt"], _CKPT_CACHE["val"] = mt, val
+    _CKPT_CACHE["key"], _CKPT_CACHE["val"] = cache_key, val
     return val
 
 
@@ -1328,6 +1351,104 @@ def _weekly_file_sig() -> list:
         return []
 
 
+def _data_signature() -> dict:
+    """A fingerprint of the CURRENT weekly-sales data, for deciding whether a
+    saved checkpoint is stale. Uses the local file set when there is one (same
+    as the original design, so every existing local/test setup is unaffected);
+    falls back to a database fingerprint (row count + latest update) when
+    there are no files, which is what a real deploy actually has."""
+    files = _weekly_file_sig()
+    if files:
+        return {"kind": "files", "files": files}
+    from sqlalchemy import func
+    from wms.db import SessionLocal
+    from wms.models import WeeklySalesLine
+    db = SessionLocal()
+    try:
+        n = db.query(func.count(WeeklySalesLine.id)).scalar() or 0
+        mx = db.query(func.max(WeeklySalesLine.updated_at)).scalar()
+    finally:
+        db.close()
+    return {"kind": "db", "rows": int(n), "updated": mx.isoformat() if mx else None}
+
+
+# ---------------------------------------------------------------- checkpoint DB
+#   The saved network/booster/blend files under output/ don't survive a host
+#   with no persistent disk (a Render restart wipes them, same as the
+#   file-based analytics data did). ModelCheckpoint mirrors each local file as
+#   one DB row; sync_checkpoints_to_db() pushes local -> DB right after a
+#   training run, and each load function pulls DB -> local (self-healing the
+#   local cache) the first time it finds the local file missing or stale.
+def _db_get_checkpoint(name: str):
+    from wms.db import SessionLocal
+    from wms.models import ModelCheckpoint
+    db = SessionLocal()
+    try:
+        return db.query(ModelCheckpoint).filter(ModelCheckpoint.name == name).first()
+    finally:
+        db.close()
+
+
+def _db_put_checkpoint(name: str, *, data: bytes | None = None,
+                       meta: dict | None = None, text_value: str | None = None) -> None:
+    import json
+    from wms.db import SessionLocal
+    from wms.models import ModelCheckpoint
+    db = SessionLocal()
+    try:
+        row = db.query(ModelCheckpoint).filter(ModelCheckpoint.name == name).first()
+        if row is None:
+            row = ModelCheckpoint(name=name)
+            db.add(row)
+        if data is not None:
+            row.data = data
+        if meta is not None:
+            row.meta_json = json.dumps(meta)
+        if text_value is not None:
+            row.text_value = text_value
+        db.commit()
+    finally:
+        db.close()
+
+
+def sync_checkpoints_to_db() -> list[str]:
+    """Push whatever checkpoint files currently exist locally into the
+    database. Call this right after training (train_and_save() or the
+    quicker booster-only refresh) writes its local files - it's what makes
+    those weights survive a restart on a host with no persistent disk.
+    Returns the names actually synced."""
+    import json
+    synced = []
+    for name, ckpt_path, meta_path in (
+        ("esrnn_ratio", _ratio_ckpt_path(), _ratio_meta_path()),
+        ("gbm", _gbm_ckpt_path(), _gbm_meta_path()),
+        ("lgbm", _lgbm_ckpt_path(), _lgbm_meta_path()),
+    ):
+        if not ckpt_path.exists():
+            continue
+        meta = None
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:                                 # noqa: BLE001
+                meta = None
+        _db_put_checkpoint(name, data=ckpt_path.read_bytes(), meta=meta)
+        synced.append(name)
+    bwp = _blend_weights_path()
+    if bwp.exists():
+        try:
+            meta = json.loads(bwp.read_text(encoding="utf-8"))
+            _db_put_checkpoint("blend", meta=meta)
+            synced.append("blend")
+        except Exception:                                     # noqa: BLE001
+            pass
+    mcp = _model_choice_path()
+    if mcp.exists():
+        _db_put_checkpoint("model_choice", text_value=mcp.read_text(encoding="utf-8").strip())
+        synced.append("model_choice")
+    return synced
+
+
 # ---- saved gradient-boosted boosters ("gbm" = XGBoost, "lgbm" = LightGBM) ----
 def _gbm_ckpt_path() -> Path:
     return get_settings().out / "weekly_gbm.json"        # xgboost native format
@@ -1345,25 +1466,38 @@ def _lgbm_meta_path() -> Path:
     return get_settings().out / "weekly_lgbm.meta.json"
 
 
-def _ckpt_path_if_fresh(ckpt: Path, meta: Path):
-    """Path (str) of a saved booster IF it exists and was trained on the current
-    weekly-sales file set; else ``None`` (it then fits in-request, a few sec)."""
+def _ckpt_path_if_fresh(ckpt: Path, meta: Path, db_name: str):
+    """Path (str) of a saved booster IF it exists (locally, or restored from
+    the database when there's no local file to begin with) and was trained on
+    the current weekly-sales data; else ``None`` (it then fits in-request, a
+    few sec). xgboost/lightgbm's native loaders need an actual file path, so
+    a database-only checkpoint is written out to the local path first -
+    that's a one-time restore per process, not a per-request cost."""
     import json
     if not ckpt.exists():
-        return None
+        row = _db_get_checkpoint(db_name)
+        if row is None or not row.data:
+            return None
+        try:
+            ckpt.parent.mkdir(parents=True, exist_ok=True)
+            ckpt.write_bytes(row.data)
+            if row.meta_json:
+                meta.write_text(row.meta_json, encoding="utf-8")
+        except OSError:
+            return None
     try:
         m = json.loads(meta.read_text(encoding="utf-8"))
     except Exception:                                     # noqa: BLE001
         return None
-    return str(ckpt) if m.get("files") == _weekly_file_sig() else None
+    return str(ckpt) if m.get("data_sig") == _data_signature() else None
 
 
 def _gbm_ckpt_path_if_fresh():
-    return _ckpt_path_if_fresh(_gbm_ckpt_path(), _gbm_meta_path())
+    return _ckpt_path_if_fresh(_gbm_ckpt_path(), _gbm_meta_path(), "gbm")
 
 
 def _lgbm_ckpt_path_if_fresh():
-    return _ckpt_path_if_fresh(_lgbm_ckpt_path(), _lgbm_meta_path())
+    return _ckpt_path_if_fresh(_lgbm_ckpt_path(), _lgbm_meta_path(), "lgbm")
 
 
 def save_gbm_meta(meta: dict) -> None:
@@ -1392,29 +1526,43 @@ def _blend_weights_path() -> Path:
 _BW_CACHE: dict = {}
 
 
+def _blend_dict_to_weights(d: dict):
+    w = {k: float(v) for k, v in (d.get("weights") or {}).items()
+         if k in _GLOBAL and float(v) > 0}
+    return w if w and sum(w.values()) > 0 else None
+
+
 def load_blend_weights():
-    """The learned ``{model: weight}`` blend from ``train_and_save`` (memoised on
-    mtime), or ``None`` to use the :data:`_BLEND_W` fallback. Only weights over
-    known models with a positive sum are accepted."""
+    """The learned ``{model: weight}`` blend from ``train_and_save`` (memoised
+    on mtime, or the database row's timestamp with no local file), or
+    ``None`` to use the :data:`_BLEND_W` fallback. Only weights over known
+    models with a positive sum are accepted."""
     import json
     p = _blend_weights_path()
     try:
         mt = p.stat().st_mtime
+        cache_key = ("file", mt)
     except OSError:
-        _BW_CACHE.clear()
-        return None
-    if _BW_CACHE.get("mt") == mt:
+        row = _db_get_checkpoint("blend")
+        if row is None or not row.meta_json:
+            _BW_CACHE.clear()
+            return None
+        cache_key = ("db", row.updated_at.isoformat())
+        if _BW_CACHE.get("key") == cache_key:
+            return _BW_CACHE.get("val")
+        try:
+            val = _blend_dict_to_weights(json.loads(row.meta_json))
+        except Exception:                                 # noqa: BLE001
+            val = None
+        _BW_CACHE["key"], _BW_CACHE["val"] = cache_key, val
+        return val
+    if _BW_CACHE.get("key") == cache_key:
         return _BW_CACHE.get("val")
-    val = None
     try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-        w = {k: float(v) for k, v in (d.get("weights") or {}).items()
-             if k in _GLOBAL and float(v) > 0}
-        if w and sum(w.values()) > 0:
-            val = w
+        val = _blend_dict_to_weights(json.loads(p.read_text(encoding="utf-8")))
     except Exception:                                     # noqa: BLE001
         val = None
-    _BW_CACHE["mt"], _BW_CACHE["val"] = mt, val
+    _BW_CACHE["key"], _BW_CACHE["val"] = cache_key, val
     return val
 
 
@@ -1432,29 +1580,40 @@ def save_blend_weights(weights: dict, meta: dict | None = None) -> None:
         pass
 
 
-def checkpoint_status() -> dict:
-    """For the Flow Analysis 'Forecast model' panel: is there a saved network,
-    when was it trained, on how much data, and is it stale vs the files now."""
+def _read_meta_local_or_db(path: Path, db_name: str) -> dict | None:
     import json
     try:
-        meta = json.loads(_ratio_meta_path().read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:                                     # noqa: BLE001
+        pass
+    row = _db_get_checkpoint(db_name)
+    if row is None or not row.meta_json:
+        return None
+    try:
+        return json.loads(row.meta_json)
+    except Exception:                                     # noqa: BLE001
+        return None
+
+
+def checkpoint_status() -> dict:
+    """For the Flow Analysis 'Forecast model' panel: is there a saved network,
+    when was it trained, on how much data, and is it stale vs the data now.
+    Reads the database when there's no local meta file - a host with no
+    persistent disk always takes this path."""
+    meta = _read_meta_local_or_db(_ratio_meta_path(), "esrnn_ratio")
+    if meta is None:
         return {"exists": False, "mode": "on-demand (trains on each restart)"}
-    sig = _weekly_file_sig()
+    sig = _data_signature()
     meta["exists"] = True
     meta["mode"] = "saved network"
-    meta["stale"] = meta.get("files") not in (None, sig)
-    try:
-        gm = json.loads(_gbm_meta_path().read_text(encoding="utf-8"))
-        gm["stale"] = gm.get("files") not in (None, sig)
+    meta["stale"] = meta.get("data_sig") not in (None, sig)
+    gm = _read_meta_local_or_db(_gbm_meta_path(), "gbm")
+    if gm is not None:
+        gm["stale"] = gm.get("data_sig") not in (None, sig)
         meta["gbm"] = gm
-    except Exception:                                     # noqa: BLE001
-        pass
-    try:
-        bw = json.loads(_blend_weights_path().read_text(encoding="utf-8"))
+    bw = _read_meta_local_or_db(_blend_weights_path(), "blend")
+    if bw is not None:
         meta["blend"] = bw                                # weights + rolling_origin
-    except Exception:                                     # noqa: BLE001
-        pass
     return meta
 
 
@@ -1483,16 +1642,23 @@ def train_and_save(epochs: int = 400, val_weeks: int = 3, quick: bool = False) -
     hi = float(getattr(cfg, "weekly_ratio_hi", 1.5))
     ep = 120 if quick else epochs
 
-    # thorough fit on the FULL history (this is the network the live forecast uses)
-    _, state = _nn.esrnn_ratio_forecast(
-        MAT, W, 1, base=_ratio_base(MAT, W), lo=lo, hi=hi,
-        epochs=ep, val_weeks=val_weeks, return_state=True)
-    if state is None:
-        raise RuntimeError("esrnn_ratio training returned no state (torch missing?)")
+    # The neural net is the slow, heavy part (minutes) - skip it entirely when
+    # config has it off (e.g. Render's free-tier render.yaml, to fit 512MB RAM).
+    # Everything below (boosters, blend) trains regardless; it's what an
+    # automatic post-upload retrain actually needs on a resource-limited host.
+    state = None
+    if getattr(cfg, "weekly_esrnn", True) and getattr(cfg, "weekly_esrnn_ratio", True):
+        try:
+            _, state = _nn.esrnn_ratio_forecast(
+                MAT, W, 1, base=_ratio_base(MAT, W), lo=lo, hi=hi,
+                epochs=ep, val_weeks=val_weeks, return_state=True)
+        except Exception as e:                            # noqa: BLE001
+            import warnings
+            warnings.warn(f"esrnn_ratio training skipped: {e}")
 
     from wms.analytics import weekly_ml as _ml
     cats = np.array([_cat_of(pan, k) for k in keys])
-    sig = _weekly_file_sig()
+    sig = _data_signature()
     now = _dt.datetime.now().replace(microsecond=0).isoformat(" ")
 
     # persist the SERVED boosters: fit on the FULL history (leak-free for the
@@ -1501,7 +1667,7 @@ def train_and_save(epochs: int = 400, val_weeks: int = 3, quick: bool = False) -
         _ml.gbm_forecast(MAT, weeks, W, 1, keys=keys, cats=cats,
                          model_out=str(_gbm_ckpt_path()))
         save_gbm_meta({"trained_at": now, "n_series": int(S), "n_weeks": int(W),
-                       "branches": sorted({k[0] for k in keys}), "files": sig})
+                       "branches": sorted({k[0] for k in keys}), "data_sig": sig})
     except Exception as e:                                # noqa: BLE001
         import warnings
         warnings.warn(f"gbm save skipped: {e}")
@@ -1509,7 +1675,7 @@ def train_and_save(epochs: int = 400, val_weeks: int = 3, quick: bool = False) -
         _ml.lgbm_forecast(MAT, weeks, W, 1, keys=keys, cats=cats,
                           model_out=str(_lgbm_ckpt_path()))
         save_lgbm_meta({"trained_at": now, "n_series": int(S), "n_weeks": int(W),
-                        "branches": sorted({k[0] for k in keys}), "files": sig})
+                        "branches": sorted({k[0] for k in keys}), "data_sig": sig})
     except Exception as e:                                # noqa: BLE001
         import warnings
         warnings.warn(f"lgbm save skipped: {e}")
@@ -1537,7 +1703,7 @@ def train_and_save(epochs: int = 400, val_weeks: int = 3, quick: bool = False) -
                    and lw["bias"] >= -6.0)
     chosen_w = learned_w if use_learned else fixed_w
     save_blend_weights(chosen_w, {
-        "trained_at": now, "files": sig, "origins": [weeks[o] for o in origins],
+        "trained_at": now, "data_sig": sig, "origins": [weeks[o] for o in origins],
         "pool": list(P), "rolling_origin": {
             **{m: scores[m] for m in P},
             "blend_fixed": scores["blend_fixed"],
@@ -1569,7 +1735,7 @@ def train_and_save(epochs: int = 400, val_weeks: int = 3, quick: bool = False) -
         "epochs": int(ep), "val_weeks": int(val_weeks),
         "holdout_wape": blend_s["wape"] if blend_s else None,
         "holdout_bias": blend_s["bias"] if blend_s else None,
-        "ratio_lo": lo, "ratio_hi": hi, "files": sig,
+        "ratio_lo": lo, "ratio_hi": hi, "data_sig": sig,
         "censored_weeks": int(_umeta.get("censored", 0)),
         "inventory_used": bool(_umeta.get("inventory", False)),
         "blend_weights": {k: round(v, 3) for k, v in chosen_w.items()},
@@ -1579,7 +1745,9 @@ def train_and_save(epochs: int = 400, val_weeks: int = 3, quick: bool = False) -
             **{k: v for k, v in scores.items() if v is not None},
             **({"lstm": lstm_s} if lstm_s else {})},
     }
-    save_ratio_checkpoint(state, meta)
+    if state is not None:
+        save_ratio_checkpoint(state, meta)
+    sync_checkpoints_to_db()
     return meta
 
 
@@ -1827,18 +1995,22 @@ def _short_week(lab: str) -> str:
         return lab
 
 
-def sales_products() -> list[dict]:
-    """``[{"sku", "name"}]`` for every product with weekly sales history — the
-    autocomplete list for the Flow Analysis sales plot."""
-    pan = cached_panel()
+def sales_products(panel: dict | None = None) -> list[dict]:
+    """``[{"sku", "name"}]`` for every product with sales history — the
+    autocomplete list for the Flow Analysis sales plot. ``panel`` overrides
+    the default weekly :func:`cached_panel` (e.g. with
+    ``monthly_sales.cached_matrix_panel()``), for any of these functions - same
+    shape, different period granularity - see ``monthly_sales.cached_matrix_panel()``."""
+    pan = panel if panel is not None else cached_panel()
     seen: dict = {}
     for (bc, sk) in pan["keys"]:
         seen.setdefault(sk, pan["item_of"].get((bc, sk), ""))
     return [{"sku": k, "name": v} for k, v in sorted(seen.items())]
 
 
-def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales") -> dict:
-    """Weekly time series for the Flow Analysis plot.
+def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
+                        panel: dict | None = None, period_fmt=None) -> dict:
+    """Time series for the Flow Analysis plot (weekly by default).
 
     ``bcode``   restrict to a branch (code ``BM`` or display-name prefix); blank =
                 every branch.
@@ -1846,19 +2018,30 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales") -
                 product, i.e. the branch's total.
     ``metric``  ``sales`` (units sold, default), ``inventory`` (weekly on-hand
                 from the Hansa stock files) or ``both`` (overlay). Inventory is
-                only available where weekly stock files have been loaded.
+                only available where weekly stock files have been loaded, and
+                only when using the default weekly ``panel`` - a custom panel
+                (e.g. monthly) has no matching on-hand series, so it always
+                shows as "sales".
+    ``panel``   overrides the default weekly :func:`cached_panel`.
+    ``period_fmt`` overrides the default weekly period-label formatter
+                (``_short_week``) - pass ``monthly_sales.short_month`` when
+                using a monthly ``panel``, so labels carry the year.
 
     With a product set and ``bcode`` blank the series is that product summed
     across branches. Returns the raw weeks/values plus a ready-to-render SVG
     layout (polylines, area, dots, gridlines, x-ticks) on a fixed viewBox.
     """
-    pan = cached_panel()
+    custom_panel = panel is not None
+    pan = panel if custom_panel else cached_panel()
+    fmt = period_fmt or _short_week
     MAT, keys, weeks = pan["MAT"], pan["keys"], pan["weeks"]
     item_of = pan["item_of"]
     b, s = bcode.strip().lower(), sku.strip().lower()
     metric = (metric or "sales").strip().lower()
     if metric not in ("sales", "inventory", "both"):
         metric = "sales"
+    if custom_panel and metric != "sales":
+        metric = "sales"                      # no on-hand series for a non-default panel
 
     match_bc = _bcode_matcher(b, keys)
     idx = []
@@ -1917,7 +2100,7 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales") -
                  + " ".join(f"L{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
                  + f" L{xs[-1]:.1f},{base:.1f} Z") if n else "")
         dots = [{"x": round(x, 1), "y": round(y, 1),
-                 "label": _short_week(weeks[j]), "value": series[j], "unit": unit}
+                 "label": fmt(weeks[j]), "value": series[j], "unit": unit}
                 for j, (x, y) in enumerate(zip(xs, ys))]
         return {"line": line, "area": area, "dots": dots}
 
@@ -1932,11 +2115,11 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales") -
                         if (show_sales and show_inv) else "")}
             for f in (0.0, 0.25, 0.5, 0.75, 1.0)]
     step = max(1, n // 8)
-    xticks = [{"x": round(xs[j], 1), "label": _short_week(weeks[j])}
+    xticks = [{"x": round(xs[j], 1), "label": fmt(weeks[j])}
               for j in range(n) if j % step == 0 or j == n - 1]
 
     return {
-        "weeks": [_short_week(w) for w in weeks], "values": vals,
+        "weeks": [fmt(w) for w in weeks], "values": vals,
         "inventory": inv, "metric": metric, "inv_available": OH is not None,
         "inv_peak": inv_peak, "inv_total": int(sum(inv)),
         "peak": peak, "total": total, "n_weeks": n, "n_skus": len(matched),
@@ -2006,7 +2189,7 @@ def _assign_colours(items: list) -> dict:
 
 
 def sales_mix(bcode: str = "", metric: str = "units", skus=None,
-              top: int = 8) -> dict:
+              top: int = 8, panel: dict | None = None) -> dict:
     """Each product's share of the total, as a ready-to-render pie.
 
     ``metric``  ``units`` (qty), ``profit`` or ``revenue`` (turnover).
@@ -2023,7 +2206,7 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
     """
     import math
     src, metric_label = _MIX_METRICS.get(metric, _MIX_METRICS["units"])
-    pan = cached_panel()
+    pan = panel if panel is not None else cached_panel()
     keys, item_of = pan["keys"], pan["item_of"]
     M = pan.get(src)
     branch_label = (BRANCH_NAME.get(bcode.strip().upper(), bcode.strip())
@@ -2153,12 +2336,14 @@ def _pie_shapes(data):
     return slices, legend, {"w": 240, "h": 240, "cx": cx, "cy": cy, "r": r}
 
 
-def flow_summary() -> dict:
+def flow_summary(panel: dict | None = None, period_fmt=None) -> dict:
     """Headline numbers for the Flow Analysis KPI strip (Power-BI-style tiles):
-    last week's units + week-on-week change, last week's revenue + WoW change
-    and the all-time gross margin, the top branch and its share, the
-    best-selling product (units) and the best product by profit."""
-    pan = cached_panel()
+    last period's units + period-on-period change, last period's revenue +
+    change and the all-time gross margin, the top branch and its share, the
+    best-selling product (units) and the best product by profit. ``panel`` /
+    ``period_fmt`` override the weekly defaults - see :func:`weekly_sales_series`."""
+    pan = panel if panel is not None else cached_panel()
+    fmt = period_fmt or _short_week
     MAT, keys, weeks = pan["MAT"], pan["keys"], pan["weeks"]
     n = len(weeks)
     if not getattr(MAT, "size", 0) or n == 0:
@@ -2206,7 +2391,7 @@ def flow_summary() -> dict:
         "has_data": True,
         "week_units": int(round(last)),
         "wow_pct": wow,
-        "week_label": _short_week(weeks[-1]),
+        "week_label": fmt(weeks[-1]),
         "week_revenue": rev_week,
         "revenue_wow_pct": rev_wow,
         "margin_pct": margin_pct,
@@ -2223,18 +2408,19 @@ def flow_summary() -> dict:
 
 
 def worst_performers(db, *, bcodes=None, limit: int = 15,
-                     weeks: int = 13) -> dict:
+                     weeks: int = 13, panel: dict | None = None) -> dict:
     """Dead / slow stock: products that sell little **and** earn little, yet are
     still sitting in branch inventory. Returns ``{"overall": [...],
     "by_branch": [...], "weeks": n}`` where each list holds row dicts already
     formatted for :func:`_macros.table`, worst first.
 
     ``bcodes`` (list of branch codes) restricts BOTH lists to those branches;
-    empty / ``None`` means every branch.
-    """
+    empty / ``None`` means every branch. ``panel`` overrides the weekly
+    default (``weeks`` then counts periods of whatever granularity ``panel``
+    uses, e.g. months)."""
     from wms.services import stock as stock_svc
 
-    pan = cached_panel()
+    pan = panel if panel is not None else cached_panel()
     MAT, PROFIT, keys, wk = (pan.get("MAT"), pan.get("PROFIT"),
                              pan["keys"], pan["weeks"])
     if not getattr(MAT, "size", 0) or not keys:
@@ -2605,18 +2791,21 @@ def _diverging_bar_svg(values, labels=None, w0: float = 720.0, h0: float = 220.0
             "zero_x0": pad_x, "zero_x1": w0 - pad_x}
 
 
-def growth_overview(weeks: int = 12, bcode: str = "") -> dict:
-    """Network growth: how total units sold moved week over week, and how
-    many branches / distinct products were actively selling each week -
-    built from the same weekly sales panel used everywhere else (no separate
+def growth_overview(weeks: int = 12, bcode: str = "", panel: dict | None = None,
+                    period_fmt=None) -> dict:
+    """Network growth: how total units sold moved period over period, and how
+    many branches / distinct products were actively selling each period -
+    built from the same sales panel used everywhere else (no separate
     tracking system, no invented customer/visitor counts this WMS has no
     data source for).
 
     ``bcode`` (optional) scopes ONLY the ``sales_growth`` chart to one branch
     - every other figure here (active branches/products, units, overall
     growth %) stays network-wide regardless, since those are the page's
-    shared KPI strip, not part of the chart being filtered."""
-    pan = cached_panel()
+    shared KPI strip, not part of the chart being filtered. ``panel`` /
+    ``period_fmt`` override the weekly defaults - see :func:`weekly_sales_series`."""
+    pan = panel if panel is not None else cached_panel()
+    fmt = period_fmt or _short_week
     MAT, keys = pan.get("MAT"), pan.get("keys")
     if not pan["weeks"] or not getattr(MAT, "size", 0):
         return {"has_data": False}
@@ -2643,10 +2832,10 @@ def growth_overview(weeks: int = 12, bcode: str = "") -> dict:
     for i, (w, v) in enumerate(zip(wk, growth_units_per_week)):
         prev = growth_units_per_week[i - 1] if i > 0 else None
         pct = round(100 * (v - prev) / prev, 1) if prev and prev > 0 else None
-        growth_pts.append({"label": _short_week(w), "value": int(round(v)), "pct": pct})
+        growth_pts.append({"label": fmt(w), "value": int(round(v)), "pct": pct})
 
-    sku_pts = [{"label": _short_week(w), "value": c} for w, c in zip(wk, skus_by_week)]
-    branch_pts = [{"label": _short_week(w), "value": c} for w, c in zip(wk, branches_by_week)]
+    sku_pts = [{"label": fmt(w), "value": c} for w, c in zip(wk, skus_by_week)]
+    branch_pts = [{"label": fmt(w), "value": c} for w, c in zip(wk, branches_by_week)]
 
     half = max(1, len(units_per_week) // 2)
     first_half, second_half = float(units_per_week[:half].sum()), float(units_per_week[half:].sum())
@@ -2733,7 +2922,8 @@ def abc_classification() -> dict:
             "strategy": _ABC_STRATEGY}
 
 
-def branch_mix(sku: str = "", metric: str = "units", bcodes=None) -> dict:
+def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
+              panel: dict | None = None) -> dict:
     """Each BRANCH's share of the total, as a ready-to-render pie (same shape as
     :func:`sales_mix`, so the pie_card macro renders it).
 
@@ -2744,7 +2934,7 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None) -> dict:
                 every branch with data.
     """
     src, metric_label = _MIX_METRICS.get(metric, _MIX_METRICS["units"])
-    pan = cached_panel()
+    pan = panel if panel is not None else cached_panel()
     keys, item_of = pan["keys"], pan["item_of"]
     M = pan.get(src)
     s = sku.strip().lower()

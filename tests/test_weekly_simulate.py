@@ -245,12 +245,16 @@ def test_a_partial_month_export_only_simulates_the_days_it_covers(_isolate):
 
 def test_upload_monthly_sales_route_works_without_a_ui_card(_isolate, seeded):
     """The 'Monthly sales' upload form was dropped from the Sales & Forecasting
-    page (the weekly-sales upload is the front door now, and it already drops
-    any now-redundant simulated week the moment real data arrives), but the
-    underlying POST /analytics/upload (kind=sales) route must keep working -
-    a branch's history still arrives this way whenever a real weekly export
-    isn't ready yet. The route writes straight into MonthlySalesLine now, not
-    a file - see monthly_sales.parse_upload / save_month."""
+    page (the weekly-sales upload is the front door now), but the underlying
+    POST /analytics/upload (kind=sales) route must keep working - a branch's
+    history still arrives this way whenever a real weekly export isn't ready
+    yet. The route writes straight into MonthlySalesLine now, not a file - see
+    monthly_sales.parse_upload / save_month. It deliberately does NOT trigger
+    weekly_simulate.regenerate() any more - simulated/estimated weekly figures
+    were judged too unreliable to feed the Allocation plan, so the weekly
+    model now only ever trains on real weekly uploads (weekly_simulate.py
+    itself still works and is exercised directly by the tests above, it is
+    just no longer wired into the live upload routes)."""
     wd, hd = _isolate
     from fastapi.testclient import TestClient
     from wms.api.main import app
@@ -280,4 +284,4 @@ def test_upload_monthly_sales_route_works_without_a_ui_card(_isolate, seeded):
     finally:
         db.close()
     assert rows and rows[0].sku == "AAA"
-    assert _simulated_weeks("BM")                          # gap-filled automatically
+    assert not _simulated_weeks("BM")                       # no auto gap-filling any more
