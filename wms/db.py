@@ -42,6 +42,23 @@ class TimestampedBase(Base):
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 
+def with_db_retries(fn, *args, retries: int = 3, **kwargs):
+    """Retry a flaky remote-DB read/write a few times with a short backoff.
+    A large query over a real network occasionally drops mid-transfer (seen
+    in production as pymysql's "Lost connection to MySQL server during
+    query") even with the read/write timeouts above - that should degrade to
+    one slow retry, not crash the request. Only meant for read-mostly calls
+    that are safe to simply re-run (nothing here commits a partial write)."""
+    import time
+    for attempt in range(1, retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception:                                 # noqa: BLE001
+            if attempt == retries:
+                raise
+            time.sleep(1.5 * attempt)
+
+
 def get_session():
     """FastAPI dependency / context helper - yields a session, always closes."""
     db = SessionLocal()

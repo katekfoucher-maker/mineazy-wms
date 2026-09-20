@@ -75,9 +75,19 @@ def set_branch_stock(db: Session, *, branch_id: int, items: list[dict],
 
 def levels_df(db: Session) -> pd.DataFrame:
     """One row per (branch_code, sku): columns branch_code, sku, on_hand."""
-    rows = (db.query(Branch.code, StockOnHand.sku, StockOnHand.qty_on_hand)
-            .join(Branch, Branch.id == StockOnHand.branch_id)
-            .all())
+    import time
+    query = (db.query(Branch.code, StockOnHand.sku, StockOnHand.qty_on_hand)
+             .join(Branch, Branch.id == StockOnHand.branch_id))
+    rows = None
+    for attempt in range(1, 4):
+        try:
+            rows = query.all()
+            break
+        except Exception:                                 # noqa: BLE001
+            db.rollback()                # a Session is unusable after an error until rolled back
+            if attempt == 3:
+                raise
+            time.sleep(1.5 * attempt)
     if not rows:
         return pd.DataFrame(columns=["branch_code", "sku", "on_hand"])
     df = pd.DataFrame(rows, columns=["branch_code", "sku", "on_hand"])
