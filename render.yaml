@@ -28,6 +28,13 @@ services:
       # 512MB RAM. Flip to "true" once on a bigger plan if you want them.
       - key: WEEKLY_ESRNN
         value: "false"
+      # weekly_esrnn_ratio is a SEPARATE flag from weekly_esrnn (a different
+      # candidate model, gated independently in _neural_forecasts()) - easy
+      # to miss, and WEEKLY_ESRNN=false alone does NOT turn it off. This was
+      # very likely the dominant cause of the 512MB OOM crashes: it was
+      # still fitting a neural net fresh on every uncached request.
+      - key: WEEKLY_ESRNN_RATIO
+        value: "false"
       - key: WEEKLY_NEURALPROPHET
         value: "false"
       - key: WEEKLY_LSTM
