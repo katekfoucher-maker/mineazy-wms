@@ -83,6 +83,15 @@ class Settings(BaseSettings):
     # near-zero sales week as a stockout if the SKU normally sells most weeks and
     # that week is flanked by in-stock weeks.
     weekly_unconstrain_heuristic: bool = True
+    # "monthly" (the real app's default): the weekly forecasting engine trains
+    # and predicts from real monthly sales history (see monthly_sales.py) -
+    # real weekly upload history is still too thin across most branches to
+    # train on, so build() estimates a weekly rate from the monthly model's
+    # prediction instead (divides by 4, same convention weekly_demand_estimate()
+    # already used). "weekly" restores the original behaviour (WeeklySalesLine /
+    # local weekly files) - the test suite pins this so its many synthetic-
+    # weekly-data fixtures keep exercising the weekly-cadence code paths.
+    weekly_data_source: str = "monthly"
     # The two torch models in the weekly comparison (each ~5-15 s to fit).
     # NeuralProphet uses a from-scratch implementation of its decomposition
     # (level + Fourier seasonality + AR-Net) because the PyPI package v0.9 does

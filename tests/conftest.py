@@ -12,6 +12,11 @@ os.environ["OUTPUT_DIR"] = tempfile.mkdtemp()
 # suite (test_weekly_neural.py exercises ES-RNN on its own)
 os.environ.setdefault("WEEKLY_ESRNN", "false")
 os.environ.setdefault("WEEKLY_NEURALPROPHET", "false")
+# the real app defaults the weekly forecasting engine to monthly-sourced data
+# (see weekly_forecast.load_panel) - the suite's many synthetic-weekly-data
+# fixtures (monkeypatched weekly_dir()) test the weekly-cadence code paths
+# directly, so they need the original "weekly" source pinned here
+os.environ.setdefault("WEEKLY_DATA_SOURCE", "weekly")
 
 import pytest  # noqa: E402
 

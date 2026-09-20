@@ -301,11 +301,24 @@ def _load_panel_from_db() -> dict:
 
 def load_panel(directory=None) -> dict:
     """Read uploaded Excel files under ``directory`` (or the configured
-    ``weekly_sales_dir``) when there are any there - the on-disk path this
-    always used to take, still used by tests that populate a directory
-    directly. Falls back to WeeklySalesLine in the database otherwise, which
-    is what a real deploy with no local filesystem to speak of actually has.
+    ``weekly_sales_dir`` when ``weekly_data_source == "weekly"``) when there
+    are any there - the on-disk path this always used to take, still used by
+    tests that populate a directory directly (an explicit ``directory``
+    always wins, regardless of the setting - that's the synthetic-fixture
+    override the test suite relies on). Falls back to WeeklySalesLine in the
+    database when there are no files and the setting is "weekly".
+
+    With the real app's default (``weekly_data_source == "monthly"``), skips
+    all of that and reads the MONTHLY sales panel instead: real weekly upload
+    history is still too thin across most branches to train the forecast on,
+    so the engine trains and predicts on real monthly totals - build()
+    derives an honest weekly rate from that (divides the model's next-period
+    prediction, the same /4 convention weekly_demand_estimate() already used
+    for its monthly-only fallback rows).
     """
+    if not directory and getattr(get_settings(), "weekly_data_source", "monthly") == "monthly":
+        from wms.analytics import monthly_sales as ms
+        return ms.cached_matrix_panel()
     d = Path(directory) if directory else weekly_dir()
     files = [f for f in sorted(glob.glob(str(d / "**" / "*.xls*"), recursive=True))
              if not os.path.basename(f).startswith("~$")]
@@ -697,17 +710,35 @@ def f_damped_mean(y, h):
     return np.full(h, _damped_mean(y))
 
 
-def f_old_excel(y, h):
-    """The old spreadsheet rule: take last month's total units (the last 4
-    weeks), add 10%, round that UP, then split evenly into 4 weekly buckets:
+def f_old_excel(y, h, monthly=False):
+    """The old spreadsheet rule: take last month's total units, add 10%,
+    round that UP:
 
-        weekly = ceil(sum(last 4 weeks) * 1.1) / 4
+        weekly = False: ceil(sum(last 4 weeks) * 1.1) / 4  (split into weekly buckets)
+        monthly = True: ceil(last month's real total * 1.1)  (left in monthly units)
+
+    ``monthly=False`` (the historical, weekly-sourced ``y``) sums the last 4
+    entries of ``y`` to approximate "last month" from weekly data, and
+    divides back down to weekly units itself - self-contained, since nothing
+    downstream does that conversion for weekly-sourced data.
+
+    ``monthly=True`` (``y`` is already one row per month - see
+    ``load_panel()``) skips both of those: the last entry of ``y`` already IS
+    last month's real total (summing 4 of them would quadruple it), and the
+    result is deliberately left in MONTHLY units rather than divided by 4
+    here - it still needs comparing against a monthly actual for backtest
+    scoring and clamping against a monthly MAT in _finalise(); build() does
+    the one-time monthly-to-weekly conversion itself, after all of that, on
+    whichever method won (not just this one).
 
     A plain, hand-checkable manual baseline for use while there is not enough
     weekly history for the statistical models to be reliable. Held flat across
     the horizon; not run through the safety uplift or level clamp (the +10% and
     the round-up ARE the calibration)."""
     y = np.asarray(y, float)
+    if monthly:
+        last_month = float(y[-1]) if y.size else 0.0
+        return np.full(h, float(np.ceil(last_month * 1.1)))
     last_month = float(y[-4:].sum()) if y.size else 0.0
     weekly = float(np.ceil(last_month * 1.1)) / 4.0
     return np.full(h, weekly)
@@ -930,6 +961,13 @@ def _ml_forecasts(MAT, weeks, tr_end, h, keys, cats, only=None):
 # ---------------------------------------------------------------- build
 def build(directory=None, test_weeks: int = TEST_WEEKS) -> dict:
     pan = load_panel(directory)
+    # matches load_panel()'s own condition for reading the monthly panel:
+    # everything below still calls its period axis "week"/"weeks" (unchanged
+    # internal terminology - a period is a period for the statistics), but
+    # the two USER-FACING rate columns need converting from a monthly total
+    # to an honest weekly estimate
+    _from_monthly = (not directory
+                     and getattr(get_settings(), "weekly_data_source", "monthly") == "monthly")
     keys, weeks = pan["keys"], pan["weeks"]
     MAT_raw = pan["MAT"].astype(float)               # what actually sold
     MAT, _smask, umeta = training_matrix(pan)        # stockout weeks lifted to level
@@ -987,7 +1025,8 @@ def build(directory=None, test_weeks: int = TEST_WEEKS) -> dict:
     # rounded up, / 4). Always available so it can be pinned while data is thin.
     if getattr(get_settings(), "weekly_old_excel", True):
         FC["old_excel"] = np.stack(
-            [f_old_excel(MAT_raw[i, :tr_end], test_weeks) for i in range(S)])
+            [f_old_excel(MAT_raw[i, :tr_end], test_weeks, monthly=_from_monthly)
+             for i in range(S)])
     # blend: a renormalised weighted mean of the component forecasts. Weights are
     # the learned ones from train_and_save (rolling-origin CV) or the hand-set
     # fallback. Built when every weighted component was fitted.
@@ -1070,7 +1109,7 @@ def build(directory=None, test_weeks: int = TEST_WEEKS) -> dict:
     prod_fc = None
     if best_method == "old_excel":                 # raw last-month rule, no refit
         prod_fc = np.stack(
-            [f_old_excel(MAT_raw[i], test_weeks) for i in range(S)])
+            [f_old_excel(MAT_raw[i], test_weeks, monthly=_from_monthly) for i in range(S)])
     elif best_method in _MODELS:
         prod_fc = np.zeros((S, test_weeks))
         fn = _MODELS[best_method]
@@ -1165,7 +1204,13 @@ def build(directory=None, test_weeks: int = TEST_WEEKS) -> dict:
         prod_uplift = hold_uplift = 1.0
     prod_fc = _finalise(prod_fc, MAT.astype(float), prod_uplift, cats,
                         infl, pool, down, up, min_u)
-    next_week = np.round(np.clip(prod_fc[:, 0], 0, None)).astype(int)
+    raw_next = np.clip(prod_fc[:, 0], 0, None)
+    # the model predicts next MONTH's total from monthly data - an honest
+    # weekly estimate divides it, same /4 convention weekly_demand_estimate()
+    # already uses for its monthly-only fallback rows
+    next_week = np.round(raw_next / 4.0 if _from_monthly else raw_next).astype(int)
+    recent = (MAT_raw[:, -1] / 4.0 if _from_monthly
+              else MAT_raw[:, -min(4, W):].mean(1))
 
     state = pd.DataFrame({
         "branch": branch_of,
@@ -1176,8 +1221,9 @@ def build(directory=None, test_weeks: int = TEST_WEEKS) -> dict:
         "method": best_method,
         "weeks_sold": nnz.astype(int),
         "weekly_demand": next_week,
-        # last ~4 wk avg of what ACTUALLY sold (raw), not the unconstrained level
-        "recent_sales": np.round(MAT_raw[:, -min(4, W):].mean(1)).astype(int),
+        # last ~4 wk avg of what ACTUALLY sold (raw) when weekly-sourced, or
+        # last real month / 4 when monthly-sourced - not the unconstrained level
+        "recent_sales": np.round(recent).astype(int),
     })
 
     # per-SKU held-out forecast (fitted on training weeks) vs actuals — same
@@ -1352,11 +1398,13 @@ def _weekly_file_sig() -> list:
 
 
 def _data_signature() -> dict:
-    """A fingerprint of the CURRENT weekly-sales data, for deciding whether a
-    saved checkpoint is stale. Uses the local file set when there is one (same
-    as the original design, so every existing local/test setup is unaffected);
-    falls back to a database fingerprint (row count + latest update) when
-    there are no files, which is what a real deploy actually has."""
+    """A fingerprint of the data ``load_panel()`` (with no ``directory``
+    override) would actually train on right now, for deciding whether a saved
+    checkpoint is stale - see :func:`load_panel` for which source that is."""
+    if getattr(get_settings(), "weekly_data_source", "monthly") == "monthly":
+        from wms.analytics import monthly_sales as ms
+        sig = ms.data_signature()
+        return {"kind": "monthly", "sig": list(sig) if isinstance(sig, tuple) else sig}
     files = _weekly_file_sig()
     if files:
         return {"kind": "files", "files": files}
@@ -1887,16 +1935,12 @@ _PANEL_CACHE: dict = {}
 
 
 def cached_panel() -> dict:
-    """The weekly sales panel (:func:`load_panel`), memoised on the current file
-    set. Feeds the Flow Analysis sales plot without re-reading every workbook on
-    each request."""
-    d = weekly_dir()
-    try:
-        sig = tuple(sorted((os.path.basename(p), os.path.getmtime(p))
-                           for p in glob.glob(str(d / "**" / "*.xls*"), recursive=True)
-                           if not os.path.basename(p).startswith("~$")))
-    except OSError:
-        sig = ()
+    """``load_panel()`` with no ``directory`` override, memoised on the
+    current data signature (see :func:`_data_signature`) so every caller that
+    doesn't pass its own ``panel`` (ABC classification, low-stock alerts, the
+    demand-estimate fallback, ...) shares one read instead of re-loading it
+    per request."""
+    sig = _data_signature()
     if _PANEL_CACHE.get("val") is not None and _PANEL_CACHE.get("sig") == sig:
         return _PANEL_CACHE["val"]
     val = load_panel()
