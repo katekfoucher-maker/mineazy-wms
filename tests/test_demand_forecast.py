@@ -104,8 +104,8 @@ def test_web_demand_tab_is_the_weekly_forecast(web):
     if not wfc.has_data():
         pytest.skip("no weekly_sales files present")
     _login(web)
-    # bare /analytics defaults to the demand forecast
-    assert "Forecast by product" in web.get("/analytics").text
+    # bare /analytics now defaults to the Allocation plan, not this tab
+    assert "Split by predicted sales" in web.get("/analytics").text
 
     r = web.get("/analytics?tab=demand")
     assert r.status_code == 200
@@ -119,7 +119,8 @@ def test_web_demand_tab_is_the_weekly_forecast(web):
     # the model / backtest section was removed from the page
     assert "Weekly demand model" not in r.text and "SEG-CHAMP" not in r.text
     assert "Demand forecast" in r.text and "Allocation plan" in r.text
-    # removed tabs still resolve (fall through to the forecast), never 500
+    # removed/unrecognised tabs still resolve (fall through to the
+    # allocation-plan default), never 500
     assert web.get("/analytics?tab=stats").status_code == 200
 
     r2 = web.get("/analytics?tab=demand&q=cable")

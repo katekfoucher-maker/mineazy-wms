@@ -37,18 +37,19 @@
       </form>
     </div>
   </div>
-  <script>
-  function upName(inp){
-    var d = inp.closest('.drop'), s = d.querySelector('.name');
-    if (inp.files && inp.files.length){
-      s.textContent = inp.files.length > 1 ? inp.files.length + ' files selected' : inp.files[0].name;
-      d.classList.add('has');
-    }
-    else { s.textContent = s.dataset.placeholder; d.classList.remove('has'); }
-  }
-  </script>
   {% endif %}
 {% endmacro %}
+
+<script>
+function upName(inp){
+  var d = inp.closest('.drop'), s = d.querySelector('.name');
+  if (inp.files && inp.files.length){
+    s.textContent = inp.files.length > 1 ? inp.files.length + ' files selected' : inp.files[0].name;
+    d.classList.add('has');
+  }
+  else { s.textContent = s.dataset.placeholder; d.classList.remove('has'); }
+}
+</script>
 
 <div class="tabs">
   <a href="/analytics?tab=allocation" class="{{ 'on' if tab=='allocation' }}">Allocation plan</a>
@@ -139,12 +140,46 @@
     <form id="split-form" method="post" action="/analytics/split"
           enctype="multipart/form-data">
 
-      <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px">
-        <label style="margin-bottom:2px">Receiving Orders</label>
-        <p class="mini muted" style="margin:0 0 8px">Stock arriving into the warehouse is
-          entered and tracked on its own page, with a full history you can review or reverse.</p>
-        <a class="btn ghost" href="/receiving/new">{{ m.ic('inbox') }} Go to Receiving Orders</a>
+      <div style="margin-bottom:12px">
+        <label style="margin-bottom:6px">Warehouse stock</label>
+        <select name="stock_mode" id="stock-mode-select" onchange="stockModeChanged(this)">
+          <option value="upload" selected>Upload Inventory</option>
+          <option value="receiving">Receiving Order</option>
+        </select>
       </div>
+
+      <div id="ro-picker-box" hidden style="margin-bottom:12px">
+        <select name="ro_no" id="ro-select">
+          <option value="">Select a receiving order…</option>
+          {% for r in receipts %}
+            <option value="{{ r.ro_no }}">{{ r.ro_no }} — {{ r.doc_date }}
+              {{ '— ' + r.supplier if r.supplier }} ({{ r.lines }} line{{ 's' if r.lines != 1 }},
+              {{ '{:,}'.format(r.received) }} units)</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div id="src-upload-box" style="margin-bottom:12px">
+        <label class="drop">
+          <span class="name" data-placeholder="Choose a stock list file">Choose a stock list file</span>
+          <input type="file" name="stock_file" accept=".csv,.tsv,.xlsx,.xls,.pdf" onchange="upName(this)">
+        </label>
+      </div>
+
+      <script>
+      function stockModeChanged(sel){
+        var rb = document.getElementById('ro-picker-box'), ub = document.getElementById('src-upload-box');
+        var roSel = document.getElementById('ro-select');
+        var fileInp = ub ? ub.querySelector('input[type="file"]') : null;
+        var upload = sel.value === 'upload';
+        if (rb) rb.hidden = upload;
+        if (ub) ub.hidden = !upload;
+        // clear whichever field is now hidden, so a leftover selection from
+        // before a mode switch never silently overrides the visible one
+        if (upload && roSel) roSel.value = '';
+        if (!upload && fileInp) { fileInp.value = ''; upName(fileInp); }
+      }
+      </script>
 
       <p class="mini muted" style="margin:0 0 6px">or manually enter</p>
       <div class="scroll"><table id="split-lines" class="fit" style="max-width:560px">

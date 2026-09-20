@@ -106,7 +106,7 @@ def logout(request: Request):
 @router.get("/")
 def home(user: User = Depends(require_login)):
     # Active Back Orders is temporarily off the nav - land on Flow Analysis instead
-    return RedirectResponse("/backorders/analysis", 303)
+    return RedirectResponse("/analysis", 303)
 
 
 # ======================================================================
@@ -127,7 +127,7 @@ def backorders(request: Request, stage: str = "", branch_id: str = "",
                   orders=[bo_entry.serialize(b) for b in rows])
 
 
-@router.get("/backorders/analysis")
+@router.get("/analysis")
 def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                         fa_metric: str = "sales",
                         bmix_sku: str = "", bmix_b1: str = "", bmix_b2: str = "",
@@ -221,17 +221,17 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                   model_options=weekly_fc.model_options())
 
 
-@router.post("/backorders/analysis/model")
+@router.post("/analysis/model")
 def backorders_analysis_model(request: Request, model: str = Form(""),
                               user: User = Depends(require_perm("backorder.enter"))):
     """Pin which weekly model every forecast uses (or '' = auto-select)."""
     weekly_fc.set_forced_model(model)
     flash(request, f"Weekly forecast model set to "
                    f"{model or 'auto (bias-aware pick)'}. Recomputing…", "success")
-    return RedirectResponse("/backorders/analysis", 303)
+    return RedirectResponse("/analysis", 303)
 
 
-@router.post("/backorders/analysis/retrain")
+@router.post("/analysis/retrain")
 def backorders_analysis_retrain(request: Request, quick: str = Form(""),
                                 user: User = Depends(require_perm("backorder.enter"))):
     """Kick off an offline, thorough retrain of the esrnn_ratio network in a
@@ -250,7 +250,7 @@ def backorders_analysis_retrain(request: Request, quick: str = Form(""),
                        "automatically when it finishes.", "success")
     except Exception as e:                                # noqa: BLE001
         flash(request, f"Could not start retraining: {e}", "error")
-    return RedirectResponse("/backorders/analysis", 303)
+    return RedirectResponse("/analysis", 303)
 
 
 def _recent_dispatches(db, limit: int = 40) -> list[dict]:
@@ -773,7 +773,7 @@ def _alloc_ctx(db, *, bcode: str = "", q: str = "", alloc_sku: str = "",
         bcode=bcode, q=q,
         alloc_sku=alloc_sku, alloc_qty=alloc_qty, alloc_branches=alloc_br,
         alloc=result, alloc_rows=(result["allocations"] if result else []),
-        abc=abc, alloc_class=alloc_class)
+        abc=abc, alloc_class=alloc_class, receipts=_recent_receiving(db))
 
 
 @router.get("/analytics")
@@ -783,12 +783,14 @@ def analytics(request: Request, tab: str = "", branch_id: str = "",
               db: Session = Depends(db_session), user: User = Depends(require_login)):
     branches = db.query(Branch).order_by(Branch.name).all()
 
-    if tab == "allocation":
+    if tab != "demand":
+        # default view: the allocation plan (bare /analytics, tab=allocation,
+        # or any other/unrecognised tab value all land here)
         return render(request, "analytics.html", user,
                       **_alloc_ctx(db, bcode=bcode, q=q, alloc_sku=alloc_sku,
                                    alloc_qty=alloc_qty, alloc_br=alloc_branches))
 
-    # default view: the weekly per-SKU demand forecast
+    # explicit tab=demand: the weekly per-SKU demand forecast
     disp = weekly_fc.display_frame(bcode=bcode, q=q)
     fc_total = len(disp)
     if bcode:
@@ -1183,6 +1185,7 @@ def _dc_stock_pairs(db) -> list[tuple[str, int]]:
 def analytics_split(request: Request,
                     split_mode: str = Form("oneoff"),
                     stock_file: UploadFile = File(None),
+                    ro_no: str = Form(""),
                     man_sku: list[str] = Form(default=[]),
                     man_qty: list[str] = Form(default=[]),
                     split_branches: list[str] = Form(default=[]),
@@ -1191,16 +1194,25 @@ def analytics_split(request: Request,
                     db: Session = Depends(db_session),
                     user: User = Depends(require_perm("backorder.enter"))):
     """Unified split tool. The stock to distribute comes from the manual product
-    lines, else an uploaded stock file (a quick one-off override), else the
-    warehouse's real stock on hand as recorded by Receiving Orders. One-off
-    mode splits it across the picked branches; weekly-order mode splits it
-    against per-branch order-request files."""
+    lines, else one specific picked Receiving Order, else an uploaded stock
+    file (a quick one-off override), else the warehouse's real stock on hand
+    as recorded by Receiving Orders overall. One-off mode splits it across the
+    picked branches; weekly-order mode splits it against per-branch
+    order-request files."""
     mode = "weekly" if split_mode == "weekly" else "oneoff"
     warnings: list = []
 
     pairs = [(s, q) for s, q in zip(man_sku, man_qty)
              if str(s or "").strip() and str(q or "").strip()]
     src = "manual entry"
+    ro_no = (ro_no or "").strip()
+    if not pairs and ro_no:
+        ro = db.query(ReceivingOrder).filter(ReceivingOrder.ro_no == ro_no).first()
+        if ro:
+            pairs = [(l.product.sku, l.received_qty) for l in ro.lines]
+            src = f"receiving order {ro.ro_no}"
+        else:
+            warnings.append(f"Receiving order '{ro_no}' not found.")
     if not pairs and stock_file is not None and (stock_file.filename or ""):
         try:
             parsed = doc_import.parse_qty_list(stock_file.file.read(),
@@ -1208,7 +1220,9 @@ def analytics_split(request: Request,
             pairs = [(l.get("sku"), l.get("qty")) for l in parsed.get("lines", [])]
             warnings += parsed.get("warnings", [])
             src = stock_file.filename
-            inv_mod.save_warehouse_inventory(parsed.get("lines", []))
+            # a one-off override for this split only - never persisted as
+            # warehouse inventory (Receiving Orders is the real, tracked way
+            # stock enters the warehouse)
         except Exception as e:                            # noqa: BLE001
             flash(request, f"Could not read the stock file: {e}", "error")
             return render(request, "analytics.html", user, split_mode=mode,

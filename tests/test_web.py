@@ -34,12 +34,12 @@ def test_home_redirects_to_flow_analysis(web):
     lands there - it goes to Flow Analysis, which stays linked."""
     _login(web, "analyst")
     r = web.get("/", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/backorders/analysis"
+    assert r.status_code == 303 and r.headers["location"] == "/analysis"
 
 
 def test_all_core_pages_render_with_erp_shell(web):
     _login(web, "controller")
-    for path in ["/backorders", "/backorders?stage=OPEN", "/backorders/analysis",
+    for path in ["/backorders", "/backorders?stage=OPEN", "/analysis",
                  "/dispatch/new", "/backorders/new", "/backorders/BO-000001",
                  "/delivery-notes/26503244",
                  "/analytics", "/analytics?tab=demand", "/analytics?tab=allocation",
@@ -59,7 +59,7 @@ def test_all_core_pages_render_with_erp_shell(web):
 
 def test_flow_analysis_sections(web):
     _login(web, "analyst")
-    r = web.get("/backorders/analysis")
+    r = web.get("/analysis")
     assert r.status_code == 200
     assert "<h1>Flow Analysis</h1>" in r.text or ">Flow Analysis<" in r.text
     assert "Worst performing products, overall" in r.text
@@ -123,7 +123,7 @@ def test_worst_performers_product_links_to_sales_history(web):
         import pytest
         pytest.skip("no weekly_sales files present")
     _login(web, "analyst")
-    r = web.get("/backorders/analysis")
+    r = web.get("/analysis")
     assert r.status_code == 200
     if "Nothing to flag here" in r.text:
         import pytest
@@ -147,18 +147,18 @@ def test_flow_analysis_model_picker(web, tmp_path, monkeypatch):
     _login(web, "controller")
 
     # the POST endpoint pins the model and persists the choice
-    r = web.post("/backorders/analysis/model", data={"model": "snaive"},
+    r = web.post("/analysis/model", data={"model": "snaive"},
                  follow_redirects=False)
     assert r.status_code == 303
     assert wfc.forced_model() == "snaive"
-    r = web.post("/backorders/analysis/model", data={"model": ""},
+    r = web.post("/analysis/model", data={"model": ""},
                  follow_redirects=False)
     assert r.status_code == 303 and wfc.forced_model() == ""
 
     # when there is a hold-out comparison to show, the picker is on the page
-    page = web.get("/backorders/analysis").text
+    page = web.get("/analysis").text
     if "Model comparison, last week held out" in page:
-        assert 'action="/backorders/analysis/model"' in page
+        assert 'action="/analysis/model"' in page
         assert '>Auto (bias-aware pick)</option>' in page
         assert '<option value="snaive"' in page
     wfc.set_forced_model("")
@@ -172,23 +172,23 @@ def test_flow_analysis_retrain_route(web, monkeypatch):
                         lambda *a, **k: calls.append((a, k)))
     _login(web, "controller")
 
-    r = web.post("/backorders/analysis/retrain", data={}, follow_redirects=False)
+    r = web.post("/analysis/retrain", data={}, follow_redirects=False)
     assert r.status_code == 303
     assert calls and "train_weekly" in " ".join(calls[0][0][0])   # spawned the trainer
     calls.clear()
-    web.post("/backorders/analysis/retrain", data={"quick": "1"}, follow_redirects=False)
+    web.post("/analysis/retrain", data={"quick": "1"}, follow_redirects=False)
     assert "--quick" in calls[0][0][0]
 
     # a viewer without backorder.enter cannot trigger it
     _login(web, "analyst")
     calls.clear()
-    r = web.post("/backorders/analysis/retrain", data={}, follow_redirects=False)
+    r = web.post("/analysis/retrain", data={}, follow_redirects=False)
     assert r.status_code in (302, 303, 403) and not calls
 
     _login(web, "controller")
-    page = web.get("/backorders/analysis").text
+    page = web.get("/analysis").text
     if "Model comparison, last week held out" in page:
-        assert 'action="/backorders/analysis/retrain"' in page
+        assert 'action="/analysis/retrain"' in page
         assert "Saved models" in page
 
 
@@ -205,10 +205,10 @@ def test_allocation_tab_has_weekly_plan_no_upload(web):
     assert 'id="fx-panel"' not in r.text                  # per-location plan table removed
     assert 'action="/analytics/split"' in r.text          # unified split form
     assert 'id="split-mode"' in r.text                    # One off / Weekly order
-    # the raw "Warehouse Inventory" upload is gone - Receiving Orders is the
-    # real way stock now enters the warehouse, linked from here instead
-    assert 'name="stock_file"' not in r.text
-    assert 'href="/receiving/new"' in r.text
+    # one selection box: pick a real Receiving Order to split, or upload a
+    # quick one-off stock list instead
+    assert 'id="ro-select"' in r.text
+    assert 'name="stock_file"' in r.text
     assert 'id="split-weekly"' in r.text                  # per-branch order files
 
 
