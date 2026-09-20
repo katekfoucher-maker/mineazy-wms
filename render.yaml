@@ -32,3 +32,13 @@ services:
         value: "false"
       - key: WEEKLY_LSTM
         value: "false"
+      # XGBoost/LightGBM, fit fresh across every (branch, sku) series on the
+      # first uncached request after a data change, also OOM'd the free
+      # plan's 512MB once the real historical import pushed the series count
+      # into the tens of thousands - off for the same reason as the above.
+      # The remaining candidates (old_excel, snaive, damped_mean, sba) are
+      # plain per-series numpy math, not a fitted model, so they're cheap.
+      - key: WEEKLY_GBM
+        value: "false"
+      - key: WEEKLY_LGBM
+        value: "false"
