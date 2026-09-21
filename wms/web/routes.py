@@ -131,9 +131,9 @@ def backorders(request: Request, stage: str = "", branch_id: str = "",
 def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                         fa_metric: str = "sales",
                         bmix_sku: str = "", bmix_b1: str = "", bmix_b2: str = "",
-                        bmix_b3: str = "",
+                        bmix_b3: str = "", bmix_weeks: int = 0,
                         pie_branch: str = "", pie_p1: str = "", pie_p2: str = "",
-                        pie_p3: str = "", pie_top: int = 8,
+                        pie_p3: str = "", pie_top: int = 8, pie_weeks: int = 0,
                         worst_branch: str = "",
                         growth_bcode: str = "BM",
                         db: Session = Depends(db_session),
@@ -146,9 +146,11 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
         bcode = b.code if b else ""
     pie_top = max(8, min(int(pie_top or 8), 500))     # "Other" expands in steps, capped
     pie_picks = [pie_p1.strip(), pie_p2.strip(), pie_p3.strip()]
-    pie_kw = dict(bcode=pie_branch.strip(), skus=pie_picks, top=pie_top)
+    pie_weeks = max(0, int(pie_weeks or 0))
+    pie_kw = dict(bcode=pie_branch.strip(), skus=pie_picks, top=pie_top, weeks=pie_weeks)
     bmix_bs = [bmix_b1.strip(), bmix_b2.strip(), bmix_b3.strip()]
-    bmix_kw = dict(sku=bmix_sku.strip(), bcodes=bmix_bs)
+    bmix_weeks = max(0, int(bmix_weeks or 0))
+    bmix_kw = dict(sku=bmix_sku.strip(), bcodes=bmix_bs, weeks=bmix_weeks)
     worst_branch = worst_branch.strip().upper()
     worst_bcodes = [worst_branch] if worst_branch else []
 
@@ -203,6 +205,7 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                   branch_id=bid, sku=sku.strip(),
                   pie_branch=pie_branch.strip(), pie_p1=pie_p1.strip(),
                   pie_p2=pie_p2.strip(), pie_p3=pie_p3.strip(), pie_top=pie_top,
+                  pie_weeks=pie_weeks, bmix_weeks=bmix_weeks,
                   bmix_sku=bmix_sku.strip(), bmix_b1=bmix_b1.strip(),
                   bmix_b2=bmix_b2.strip(), bmix_b3=bmix_b3.strip(),
                   forced_model=weekly_fc.forced_model(),
@@ -210,10 +213,10 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                   fa_metric=(fa_metric or "sales").strip().lower(),
                   sales_series=weekly_fc.weekly_sales_series(
                       bcode=bcode, sku=sku, metric=fa_metric, panel=mp, period_fmt=mfmt),
-                  bmix_units=weekly_fc.branch_mix(metric="units", panel=mp, **bmix_kw),
-                  bmix_profit=weekly_fc.branch_mix(metric="profit", panel=mp, **bmix_kw),
-                  mix_units=weekly_fc.sales_mix(metric="units", panel=mp, **pie_kw),
-                  mix_profit=weekly_fc.sales_mix(metric="profit", panel=mp, **pie_kw),
+                  bmix_units=weekly_fc.branch_mix(metric="units", panel=mp, period_fmt=mfmt, **bmix_kw),
+                  bmix_profit=weekly_fc.branch_mix(metric="profit", panel=mp, period_fmt=mfmt, **bmix_kw),
+                  mix_units=weekly_fc.sales_mix(metric="units", panel=mp, period_fmt=mfmt, **pie_kw),
+                  mix_profit=weekly_fc.sales_mix(metric="profit", panel=mp, period_fmt=mfmt, **pie_kw),
                   sku_options=weekly_fc.sales_products(panel=mp),
                   worst=weekly_fc.worst_performers(db, bcodes=worst_bcodes, panel=mp),
                   worst_branch=worst_branch,

@@ -2233,7 +2233,8 @@ def _assign_colours(items: list) -> dict:
 
 
 def sales_mix(bcode: str = "", metric: str = "units", skus=None,
-              top: int = 8, panel: dict | None = None) -> dict:
+              top: int = 8, panel: dict | None = None,
+              weeks: int = 0, period_fmt=None) -> dict:
     """Each product's share of the total, as a ready-to-render pie.
 
     ``metric``  ``units`` (qty), ``profit`` or ``revenue`` (turnover).
@@ -2247,12 +2248,24 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
                   name/percentage/rank.
                 * 2-3 given -> COMPARE mode: only those SKUs, sliced against
                   each other, no "Other".
+    ``weeks``   restrict to the most recent N periods of ``panel`` (weeks, or
+                months for a monthly ``panel``); 0/blank = all-time (default).
+                ``period_fmt`` overrides the weekly period-label formatter
+                used to describe the window (``period_label`` in the
+                result) - pass ``monthly_sales.short_month`` for a monthly
+                ``panel``, same as :func:`weekly_sales_series`.
     """
     import math
     src, metric_label = _MIX_METRICS.get(metric, _MIX_METRICS["units"])
     pan = panel if panel is not None else cached_panel()
     keys, item_of = pan["keys"], pan["item_of"]
+    all_periods = pan.get("weeks") or []
     M = pan.get(src)
+    fmt = period_fmt or _short_week
+    n_periods = len(all_periods)
+    w = max(1, min(int(weeks or 0), n_periods)) if weeks else 0
+    period_label = (f"{fmt(all_periods[-w])} – {fmt(all_periods[-1])}"
+                     if w and n_periods else "all time")
     branch_label = (BRANCH_NAME.get(bcode.strip().upper(), bcode.strip())
                     if bcode.strip() else "All branches")
     picks = []
@@ -2265,7 +2278,8 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
     compare_mode = len(picks) >= 2
     blank = {"has_data": False, "metric": metric, "metric_label": metric_label,
              "branch_label": branch_label, "slices": [], "legend": [],
-             "total": 0.0, "n_products": 0, "picked": picks, "highlight": None}
+             "total": 0.0, "n_products": 0, "picked": picks, "highlight": None,
+             "weeks": w, "period_label": period_label}
     if not getattr(M, "size", 0):
         return blank
 
@@ -2278,7 +2292,8 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
             continue
         if compare_mode and sk.lower() not in picks_lc:
             continue
-        v = float(M[i].sum())
+        row = M[i][-w:] if w else M[i]
+        v = float(row.sum())
         if v > 0:
             per[sk] = per.get(sk, 0.0) + v
     total = float(sum(per.values()))
@@ -2343,7 +2358,7 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
     return {"has_data": True, "metric": metric, "metric_label": metric_label,
             "branch_label": branch_label, "total": round(total, 2),
             "n_products": len(per), "picked": picks, "highlight": highlight,
-            "slices": slices, "legend": legend,
+            "slices": slices, "legend": legend, "weeks": w, "period_label": period_label,
             "svg": {"w": 240, "h": 240, "cx": cx, "cy": cy, "r": r}}
 
 
@@ -2967,7 +2982,7 @@ def abc_classification() -> dict:
 
 
 def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
-              panel: dict | None = None) -> dict:
+              panel: dict | None = None, weeks: int = 0, period_fmt=None) -> dict:
     """Each BRANCH's share of the total, as a ready-to-render pie (same shape as
     :func:`sales_mix`, so the pie_card macro renders it).
 
@@ -2976,11 +2991,18 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
     ``metric``  ``units`` (default), ``profit`` or ``revenue``.
     ``bcodes``  up to 3 branch codes to compare against each other; blank/None =
                 every branch with data.
+    ``weeks``/``period_fmt``  same "last N periods" window as :func:`sales_mix`.
     """
     src, metric_label = _MIX_METRICS.get(metric, _MIX_METRICS["units"])
     pan = panel if panel is not None else cached_panel()
     keys, item_of = pan["keys"], pan["item_of"]
+    all_periods = pan.get("weeks") or []
     M = pan.get(src)
+    fmt = period_fmt or _short_week
+    n_periods = len(all_periods)
+    w = max(1, min(int(weeks or 0), n_periods)) if weeks else 0
+    period_label = (f"{fmt(all_periods[-w])} – {fmt(all_periods[-1])}"
+                     if w and n_periods else "all time")
     s = sku.strip().lower()
     picks = []
     for c in (bcodes or []):
@@ -2999,7 +3021,8 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
                           or s in (item_of.get((bc, sk), "") or "").lower()):
                 continue
             matched.add(sk)
-            v = float(M[i].sum())
+            row = M[i][-w:] if w else M[i]
+            v = float(row.sum())
             if v > 0:
                 per[bc] = per.get(bc, 0.0) + v
     total = float(sum(per.values()))
@@ -3016,7 +3039,8 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
 
     blank = {"has_data": False, "metric": metric, "metric_label": metric_label,
              "branch_label": prod_label, "slices": [], "legend": [],
-             "total": 0.0, "n_products": 0, "picked": picks, "highlight": None}
+             "total": 0.0, "n_products": 0, "picked": picks, "highlight": None,
+             "weeks": w, "period_label": period_label}
     if total <= 0:
         return {**blank, "has_data": bool(getattr(M, "size", 0))}
 
@@ -3026,7 +3050,8 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
     return {"has_data": True, "metric": metric, "metric_label": metric_label,
             "branch_label": prod_label, "total": round(total, 2),
             "n_products": len(per), "picked": picks, "highlight": None,
-            "slices": slices, "legend": legend, "svg": svg}
+            "slices": slices, "legend": legend, "svg": svg,
+            "weeks": w, "period_label": period_label}
 
 
 _MODEL_BLURB = {

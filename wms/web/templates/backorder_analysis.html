@@ -98,7 +98,8 @@
 
 {% macro pie_card(mix, title, top=8) %}
 <div class="card">
-  <div class="card-head"><h3>{{ title }} ({{ mix.branch_label }})</h3></div>
+  <div class="card-head"><h3>{{ title }} ({{ mix.branch_label }})</h3>
+    {% if mix.period_label %}<span class="muted" style="font-size:12px">{{ mix.period_label }}</span>{% endif %}</div>
   {% if mix.highlight %}
     {% if mix.highlight.found %}
     <p class="muted" style="margin:0 0 10px">
@@ -272,6 +273,12 @@
   <div style="min-width:190px"><label>Compare vs</label>
     <input name="pie_p3" value="{{ pie_p3 }}" list="sales_skus" placeholder="Add a 3rd product"
            autocomplete="off" onchange="this.form.requestSubmit()"></div>
+  <div><label>Period</label>
+    <select name="pie_weeks" onchange="this.form.requestSubmit()">
+      {% for v, lbl in [(0, 'All time'), (3, 'Last 3 months'), (6, 'Last 6 months'), (12, 'Last 12 months')] %}
+      <option value="{{ v }}" {{ 'selected' if pie_weeks == v }}>{{ lbl }}</option>
+      {% endfor %}
+    </select></div>
   <div style="min-width:0"><button type="submit">Update pies</button></div>
   <input type="hidden" name="pie_top" id="pie-top-input" value="{{ pie_top }}">
 </form>
@@ -294,6 +301,12 @@
       {% for b in branches %}<option value="{{ b.code }}" {{ 'selected' if val|upper == b.code|upper }}>{{ b.name }}</option>{% endfor %}
     </select></div>
   {% endfor %}
+  <div><label>Period</label>
+    <select name="bmix_weeks" onchange="this.form.requestSubmit()">
+      {% for v, lbl in [(0, 'All time'), (3, 'Last 3 months'), (6, 'Last 6 months'), (12, 'Last 12 months')] %}
+      <option value="{{ v }}" {{ 'selected' if bmix_weeks == v }}>{{ lbl }}</option>
+      {% endfor %}
+    </select></div>
   <div style="min-width:0"><button type="submit">Update</button></div>
 </form>
 
