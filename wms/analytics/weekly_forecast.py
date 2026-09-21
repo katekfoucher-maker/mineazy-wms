@@ -2053,7 +2053,8 @@ def sales_products(panel: dict | None = None) -> list[dict]:
 
 
 def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
-                        panel: dict | None = None, period_fmt=None) -> dict:
+                        panel: dict | None = None, period_fmt=None,
+                        weeks: int = 0, date_from: str = "", date_to: str = "") -> dict:
     """Time series for the Flow Analysis plot (weekly by default).
 
     ``bcode``   restrict to a branch (code ``BM`` or display-name prefix); blank =
@@ -2070,6 +2071,10 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
     ``period_fmt`` overrides the default weekly period-label formatter
                 (``_short_week``) - pass ``monthly_sales.short_month`` when
                 using a monthly ``panel``, so labels carry the year.
+    ``weeks``/``date_from``/``date_to``  restrict the plotted periods - same
+                "last N periods" / custom-range window as :func:`sales_mix`
+                (see :func:`_period_window`); neither given plots the whole
+                history (default).
 
     With a product set and ``bcode`` blank the series is that product summed
     across branches. Returns the raw weeks/values plus a ready-to-render SVG
@@ -2078,8 +2083,11 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
     custom_panel = panel is not None
     pan = panel if custom_panel else cached_panel()
     fmt = period_fmt or _short_week
-    MAT, keys, weeks = pan["MAT"], pan["keys"], pan["weeks"]
+    MAT, keys, all_periods = pan["MAT"], pan["keys"], pan["weeks"]
     item_of = pan["item_of"]
+    lo, hi = _period_window(all_periods, weeks, date_from, date_to)
+    period_label = _period_label(all_periods, lo, hi, fmt)
+    sel_periods = all_periods[lo:hi + 1]
     b, s = bcode.strip().lower(), sku.strip().lower()
     metric = (metric or "sales").strip().lower()
     if metric not in ("sales", "inventory", "both"):
@@ -2097,16 +2105,16 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
             continue
         idx.append(i)
 
-    n = len(weeks)
-    have = bool(getattr(MAT, "size", 0)) and bool(idx)
-    vals = ([int(round(float(x))) for x in MAT[idx].sum(axis=0)]
+    n = len(sel_periods)
+    have = bool(getattr(MAT, "size", 0)) and bool(idx) and n > 0
+    vals = ([int(round(float(x))) for x in MAT[idx][:, lo:hi + 1].sum(axis=0)]
             if have else [0] * n)
     peak, total = (max(vals) if vals else 0), int(sum(vals))
 
     # weekly on-hand for the same filter (nan readings ignored in the sum)
     OH = cached_inventory_panel() if metric in ("inventory", "both") else None
-    inv_ok = OH is not None and have and np.isfinite(OH[idx]).any()
-    inv = ([int(round(float(x))) for x in np.nansum(OH[idx], axis=0)]
+    inv_ok = OH is not None and have and np.isfinite(OH[idx][:, lo:hi + 1]).any()
+    inv = ([int(round(float(x))) for x in np.nansum(OH[idx][:, lo:hi + 1], axis=0)]
            if inv_ok else [0] * n)
     inv_peak = max(inv) if inv else 0
 
@@ -2144,7 +2152,7 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
                  + " ".join(f"L{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
                  + f" L{xs[-1]:.1f},{base:.1f} Z") if n else "")
         dots = [{"x": round(x, 1), "y": round(y, 1),
-                 "label": fmt(weeks[j]), "value": series[j], "unit": unit}
+                 "label": fmt(sel_periods[j]), "value": series[j], "unit": unit}
                 for j, (x, y) in enumerate(zip(xs, ys))]
         return {"line": line, "area": area, "dots": dots}
 
@@ -2159,15 +2167,15 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
                         if (show_sales and show_inv) else "")}
             for f in (0.0, 0.25, 0.5, 0.75, 1.0)]
     step = max(1, n // 8)
-    xticks = [{"x": round(xs[j], 1), "label": fmt(weeks[j])}
+    xticks = [{"x": round(xs[j], 1), "label": fmt(sel_periods[j])}
               for j in range(n) if j % step == 0 or j == n - 1]
 
     return {
-        "weeks": [fmt(w) for w in weeks], "values": vals,
+        "weeks": [fmt(p) for p in sel_periods], "values": vals,
         "inventory": inv, "metric": metric, "inv_available": OH is not None,
         "inv_peak": inv_peak, "inv_total": int(sum(inv)),
         "peak": peak, "total": total, "n_weeks": n, "n_skus": len(matched),
-        "branch_label": branch_label, "sku_label": sku_label,
+        "branch_label": branch_label, "sku_label": sku_label, "period_label": period_label,
         "has_data": bool(getattr(MAT, "size", 0)),
         "svg": {"w": W, "h": H, "grid": grid, "xticks": xticks,
                 "x0": PL, "x1": PL + iw, "y0": PT, "y1": base,
@@ -2232,9 +2240,50 @@ def _assign_colours(items: list) -> dict:
     return out
 
 
+def _period_window(all_periods: list, weeks: int = 0, date_from: str = "",
+                   date_to: str = "") -> tuple:
+    """-> ``(lo, hi)`` inclusive column indices into ``all_periods`` (ISO date
+    strings, ascending) for a period filter shared by :func:`sales_mix`,
+    :func:`branch_mix` and :func:`weekly_sales_series`.
+
+    An explicit ``date_from``/``date_to`` (a custom range, values are entries
+    of ``all_periods`` itself) wins over ``weeks`` (a "last N periods"
+    lookback); neither given returns the whole history. ``hi < lo`` (e.g. a
+    range outside the data, or ``date_from`` after ``date_to``) means "no
+    periods match" - callers slice with it directly (``arr[lo:hi+1]`` is
+    already empty in that case) rather than needing a separate empty check.
+    """
+    n = len(all_periods)
+    if not n:
+        return 0, -1
+    if date_from or date_to:
+        lo = 0
+        if date_from:
+            lo = next((i for i, p in enumerate(all_periods) if p >= date_from), n)
+        hi = n - 1
+        if date_to:
+            hi = next((i for i in range(n - 1, -1, -1) if all_periods[i] <= date_to), -1)
+        return (lo, hi) if lo <= hi else (0, -1)
+    if weeks:
+        w = max(1, min(int(weeks), n))
+        return n - w, n - 1
+    return 0, n - 1
+
+
+def _period_label(all_periods: list, lo: int, hi: int, fmt) -> str:
+    if not all_periods or lo > hi:
+        return "no data in range"
+    if lo == 0 and hi == len(all_periods) - 1:
+        return "all time"
+    if lo == hi:
+        return fmt(all_periods[lo])
+    return f"{fmt(all_periods[lo])} – {fmt(all_periods[hi])}"
+
+
 def sales_mix(bcode: str = "", metric: str = "units", skus=None,
               top: int = 8, panel: dict | None = None,
-              weeks: int = 0, period_fmt=None) -> dict:
+              weeks: int = 0, period_fmt=None,
+              date_from: str = "", date_to: str = "") -> dict:
     """Each product's share of the total, as a ready-to-render pie.
 
     ``metric``  ``units`` (qty), ``profit`` or ``revenue`` (turnover).
@@ -2250,6 +2299,9 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
                   each other, no "Other".
     ``weeks``   restrict to the most recent N periods of ``panel`` (weeks, or
                 months for a monthly ``panel``); 0/blank = all-time (default).
+                ``date_from``/``date_to`` (explicit periods, e.g. an ISO
+                month-end date for a monthly ``panel``) override ``weeks``
+                with a custom range - see :func:`_period_window`.
                 ``period_fmt`` overrides the weekly period-label formatter
                 used to describe the window (``period_label`` in the
                 result) - pass ``monthly_sales.short_month`` for a monthly
@@ -2262,10 +2314,8 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
     all_periods = pan.get("weeks") or []
     M = pan.get(src)
     fmt = period_fmt or _short_week
-    n_periods = len(all_periods)
-    w = max(1, min(int(weeks or 0), n_periods)) if weeks else 0
-    period_label = (f"{fmt(all_periods[-w])} – {fmt(all_periods[-1])}"
-                     if w and n_periods else "all time")
+    lo, hi = _period_window(all_periods, weeks, date_from, date_to)
+    period_label = _period_label(all_periods, lo, hi, fmt)
     branch_label = (BRANCH_NAME.get(bcode.strip().upper(), bcode.strip())
                     if bcode.strip() else "All branches")
     picks = []
@@ -2279,7 +2329,7 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
     blank = {"has_data": False, "metric": metric, "metric_label": metric_label,
              "branch_label": branch_label, "slices": [], "legend": [],
              "total": 0.0, "n_products": 0, "picked": picks, "highlight": None,
-             "weeks": w, "period_label": period_label}
+             "period_label": period_label}
     if not getattr(M, "size", 0):
         return blank
 
@@ -2292,7 +2342,7 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
             continue
         if compare_mode and sk.lower() not in picks_lc:
             continue
-        row = M[i][-w:] if w else M[i]
+        row = M[i][lo:hi + 1]
         v = float(row.sum())
         if v > 0:
             per[sk] = per.get(sk, 0.0) + v
@@ -2358,7 +2408,7 @@ def sales_mix(bcode: str = "", metric: str = "units", skus=None,
     return {"has_data": True, "metric": metric, "metric_label": metric_label,
             "branch_label": branch_label, "total": round(total, 2),
             "n_products": len(per), "picked": picks, "highlight": highlight,
-            "slices": slices, "legend": legend, "weeks": w, "period_label": period_label,
+            "slices": slices, "legend": legend, "period_label": period_label,
             "svg": {"w": 240, "h": 240, "cx": cx, "cy": cy, "r": r}}
 
 
@@ -2982,7 +3032,8 @@ def abc_classification() -> dict:
 
 
 def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
-              panel: dict | None = None, weeks: int = 0, period_fmt=None) -> dict:
+              panel: dict | None = None, weeks: int = 0, period_fmt=None,
+              date_from: str = "", date_to: str = "") -> dict:
     """Each BRANCH's share of the total, as a ready-to-render pie (same shape as
     :func:`sales_mix`, so the pie_card macro renders it).
 
@@ -2991,7 +3042,8 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
     ``metric``  ``units`` (default), ``profit`` or ``revenue``.
     ``bcodes``  up to 3 branch codes to compare against each other; blank/None =
                 every branch with data.
-    ``weeks``/``period_fmt``  same "last N periods" window as :func:`sales_mix`.
+    ``weeks``/``date_from``/``date_to``/``period_fmt``  same period window as
+                :func:`sales_mix`.
     """
     src, metric_label = _MIX_METRICS.get(metric, _MIX_METRICS["units"])
     pan = panel if panel is not None else cached_panel()
@@ -2999,10 +3051,8 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
     all_periods = pan.get("weeks") or []
     M = pan.get(src)
     fmt = period_fmt or _short_week
-    n_periods = len(all_periods)
-    w = max(1, min(int(weeks or 0), n_periods)) if weeks else 0
-    period_label = (f"{fmt(all_periods[-w])} – {fmt(all_periods[-1])}"
-                     if w and n_periods else "all time")
+    lo, hi = _period_window(all_periods, weeks, date_from, date_to)
+    period_label = _period_label(all_periods, lo, hi, fmt)
     s = sku.strip().lower()
     picks = []
     for c in (bcodes or []):
@@ -3021,7 +3071,7 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
                           or s in (item_of.get((bc, sk), "") or "").lower()):
                 continue
             matched.add(sk)
-            row = M[i][-w:] if w else M[i]
+            row = M[i][lo:hi + 1]
             v = float(row.sum())
             if v > 0:
                 per[bc] = per.get(bc, 0.0) + v
@@ -3040,7 +3090,7 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
     blank = {"has_data": False, "metric": metric, "metric_label": metric_label,
              "branch_label": prod_label, "slices": [], "legend": [],
              "total": 0.0, "n_products": 0, "picked": picks, "highlight": None,
-             "weeks": w, "period_label": period_label}
+             "period_label": period_label}
     if total <= 0:
         return {**blank, "has_data": bool(getattr(M, "size", 0))}
 
@@ -3051,7 +3101,7 @@ def branch_mix(sku: str = "", metric: str = "units", bcodes=None,
             "branch_label": prod_label, "total": round(total, 2),
             "n_products": len(per), "picked": picks, "highlight": None,
             "slices": slices, "legend": legend, "svg": svg,
-            "weeks": w, "period_label": period_label}
+            "period_label": period_label}
 
 
 _MODEL_BLURB = {

@@ -66,6 +66,23 @@ def _bid(v) -> int | None:
         return None
 
 
+def _resolve_period(weeks_raw: str, date_from: str, date_to: str) -> tuple[int, str, str]:
+    """The Flow Analysis "Period" control submits a preset (an int as a
+    string, or the literal "custom") plus a From/To pair that only matters in
+    custom mode. -> ``(weeks, date_from, date_to)`` ready for
+    weekly_forecast's ``sales_mix``/``branch_mix``/``weekly_sales_series`` -
+    From/To are dropped (not just ignored) whenever the preset isn't
+    "custom", so switching back to a preset can't be defeated by stale
+    values left in those two fields from an earlier custom pick."""
+    weeks_raw = (weeks_raw or "0").strip().lower()
+    if weeks_raw == "custom":
+        return 0, date_from.strip(), date_to.strip()
+    try:
+        return max(0, int(weeks_raw)), "", ""
+    except ValueError:
+        return 0, "", ""
+
+
 def _stock_cov(db) -> dict:
     """Stock-on-hand coverage for the upload card: the DB balance, else any
     still-uploaded spreadsheet snapshot."""
@@ -129,11 +146,14 @@ def backorders(request: Request, stage: str = "", branch_id: str = "",
 
 @router.get("/analysis")
 def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
-                        fa_metric: str = "sales",
+                        fa_metric: str = "sales", fa_weeks: str = "0",
+                        fa_from: str = "", fa_to: str = "",
                         bmix_sku: str = "", bmix_b1: str = "", bmix_b2: str = "",
-                        bmix_b3: str = "", bmix_weeks: int = 0,
+                        bmix_b3: str = "", bmix_weeks: str = "0",
+                        bmix_from: str = "", bmix_to: str = "",
                         pie_branch: str = "", pie_p1: str = "", pie_p2: str = "",
-                        pie_p3: str = "", pie_top: int = 8, pie_weeks: int = 0,
+                        pie_p3: str = "", pie_top: int = 8, pie_weeks: str = "0",
+                        pie_from: str = "", pie_to: str = "",
                         worst_branch: str = "",
                         growth_bcode: str = "BM",
                         db: Session = Depends(db_session),
@@ -146,11 +166,14 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
         bcode = b.code if b else ""
     pie_top = max(8, min(int(pie_top or 8), 500))     # "Other" expands in steps, capped
     pie_picks = [pie_p1.strip(), pie_p2.strip(), pie_p3.strip()]
-    pie_weeks = max(0, int(pie_weeks or 0))
-    pie_kw = dict(bcode=pie_branch.strip(), skus=pie_picks, top=pie_top, weeks=pie_weeks)
+    pie_w, pie_df, pie_dt = _resolve_period(pie_weeks, pie_from, pie_to)
+    pie_kw = dict(bcode=pie_branch.strip(), skus=pie_picks, top=pie_top,
+                  weeks=pie_w, date_from=pie_df, date_to=pie_dt)
     bmix_bs = [bmix_b1.strip(), bmix_b2.strip(), bmix_b3.strip()]
-    bmix_weeks = max(0, int(bmix_weeks or 0))
-    bmix_kw = dict(sku=bmix_sku.strip(), bcodes=bmix_bs, weeks=bmix_weeks)
+    bmix_w, bmix_df, bmix_dt = _resolve_period(bmix_weeks, bmix_from, bmix_to)
+    bmix_kw = dict(sku=bmix_sku.strip(), bcodes=bmix_bs,
+                   weeks=bmix_w, date_from=bmix_df, date_to=bmix_dt)
+    fa_w, fa_df, fa_dt = _resolve_period(fa_weeks, fa_from, fa_to)
     worst_branch = worst_branch.strip().upper()
     worst_bcodes = [worst_branch] if worst_branch else []
 
@@ -162,6 +185,7 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
     # changes.
     mp = monthly_sales.cached_matrix_panel()
     mfmt = monthly_sales.short_month
+    period_options = [{"value": w, "label": mfmt(w)} for w in mp["weeks"]]
 
     # Power-BI-style KPI strip
     _fs = weekly_fc.flow_summary(panel=mp, period_fmt=mfmt)
@@ -202,17 +226,20 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
 
     return render(request, "backorder_analysis.html", user, branches=branches,
                   kpis=kpis, growth=_growth, growth_bcode=growth_bcode,
-                  branch_id=bid, sku=sku.strip(),
+                  branch_id=bid, sku=sku.strip(), period_options=period_options,
                   pie_branch=pie_branch.strip(), pie_p1=pie_p1.strip(),
                   pie_p2=pie_p2.strip(), pie_p3=pie_p3.strip(), pie_top=pie_top,
-                  pie_weeks=pie_weeks, bmix_weeks=bmix_weeks,
+                  pie_weeks=pie_weeks.strip().lower(), pie_from=pie_from.strip(), pie_to=pie_to.strip(),
+                  bmix_weeks=bmix_weeks.strip().lower(), bmix_from=bmix_from.strip(), bmix_to=bmix_to.strip(),
+                  fa_weeks=fa_weeks.strip().lower(), fa_from=fa_from.strip(), fa_to=fa_to.strip(),
                   bmix_sku=bmix_sku.strip(), bmix_b1=bmix_b1.strip(),
                   bmix_b2=bmix_b2.strip(), bmix_b3=bmix_b3.strip(),
                   forced_model=weekly_fc.forced_model(),
                   ckpt=weekly_fc.checkpoint_status(),
                   fa_metric=(fa_metric or "sales").strip().lower(),
                   sales_series=weekly_fc.weekly_sales_series(
-                      bcode=bcode, sku=sku, metric=fa_metric, panel=mp, period_fmt=mfmt),
+                      bcode=bcode, sku=sku, metric=fa_metric, panel=mp, period_fmt=mfmt,
+                      weeks=fa_w, date_from=fa_df, date_to=fa_dt),
                   bmix_units=weekly_fc.branch_mix(metric="units", panel=mp, period_fmt=mfmt, **bmix_kw),
                   bmix_profit=weekly_fc.branch_mix(metric="profit", panel=mp, period_fmt=mfmt, **bmix_kw),
                   mix_units=weekly_fc.sales_mix(metric="units", panel=mp, period_fmt=mfmt, **pie_kw),

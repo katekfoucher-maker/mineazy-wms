@@ -96,6 +96,30 @@
   {% endif %}
 {% endmacro %}
 
+{% macro period_filter(prefix, cur_weeks, cur_from, cur_to, period_options) %}
+  <div><label>Period</label>
+    <select name="{{ prefix }}_weeks" onchange="periodPresetChanged(this)">
+      {% for v, lbl in [('0', 'All time'), ('1', 'Last month'), ('3', 'Last 3 months'),
+                        ('6', 'Last 6 months'), ('12', 'Last 12 months'), ('custom', 'Custom range')] %}
+      <option value="{{ v }}" {{ 'selected' if cur_weeks == v }}>{{ lbl }}</option>
+      {% endfor %}
+    </select></div>
+  <div class="period-range" style="display:{{ 'flex' if cur_weeks == 'custom' else 'none' }};gap:12px">
+    <div style="min-width:140px"><label>From</label>
+      <select name="{{ prefix }}_from" onchange="this.form.requestSubmit()">
+        {% for opt in period_options %}
+        <option value="{{ opt.value }}" {{ 'selected' if (cur_from and cur_from == opt.value) or (not cur_from and loop.first) }}>{{ opt.label }}</option>
+        {% endfor %}
+      </select></div>
+    <div style="min-width:140px"><label>To</label>
+      <select name="{{ prefix }}_to" onchange="this.form.requestSubmit()">
+        {% for opt in period_options %}
+        <option value="{{ opt.value }}" {{ 'selected' if (cur_to and cur_to == opt.value) or (not cur_to and loop.last) }}>{{ opt.label }}</option>
+        {% endfor %}
+      </select></div>
+  </div>
+{% endmacro %}
+
 {% macro pie_card(mix, title, top=8) %}
 <div class="card">
   <div class="card-head"><h3>{{ title }} ({{ mix.branch_label }})</h3>
@@ -179,6 +203,7 @@
       <option value="inventory" {{ 'selected' if fa_metric == 'inventory' }}>Inventory (on hand)</option>
       <option value="both" {{ 'selected' if fa_metric == 'both' }}>Sales + inventory</option>
     </select></div>
+  {{ period_filter('fa', fa_weeks, fa_from, fa_to, period_options) }}
   <div style="min-width:0"><button type="submit">Show</button></div>
 </form>
 
@@ -190,6 +215,7 @@
 <div class="card" id="sales-chart-card">
   <div class="card-head">
     <h3>{{ _title }} ({{ sales_series.branch_label }}, {{ sales_series.sku_label }})</h3>
+    {% if sales_series.period_label %}<span class="muted" style="font-size:12px">{{ sales_series.period_label }}</span>{% endif %}
   </div>
   <div style="overflow-x:auto">
     <svg viewBox="0 0 {{ g.w }} {{ g.h }}" width="100%" preserveAspectRatio="xMidYMid meet"
@@ -273,12 +299,7 @@
   <div style="min-width:190px"><label>Compare vs</label>
     <input name="pie_p3" value="{{ pie_p3 }}" list="sales_skus" placeholder="Add a 3rd product"
            autocomplete="off" onchange="this.form.requestSubmit()"></div>
-  <div><label>Period</label>
-    <select name="pie_weeks" onchange="this.form.requestSubmit()">
-      {% for v, lbl in [(0, 'All time'), (3, 'Last 3 months'), (6, 'Last 6 months'), (12, 'Last 12 months')] %}
-      <option value="{{ v }}" {{ 'selected' if pie_weeks == v }}>{{ lbl }}</option>
-      {% endfor %}
-    </select></div>
+  {{ period_filter('pie', pie_weeks, pie_from, pie_to, period_options) }}
   <div style="min-width:0"><button type="submit">Update pies</button></div>
   <input type="hidden" name="pie_top" id="pie-top-input" value="{{ pie_top }}">
 </form>
@@ -301,12 +322,7 @@
       {% for b in branches %}<option value="{{ b.code }}" {{ 'selected' if val|upper == b.code|upper }}>{{ b.name }}</option>{% endfor %}
     </select></div>
   {% endfor %}
-  <div><label>Period</label>
-    <select name="bmix_weeks" onchange="this.form.requestSubmit()">
-      {% for v, lbl in [(0, 'All time'), (3, 'Last 3 months'), (6, 'Last 6 months'), (12, 'Last 12 months')] %}
-      <option value="{{ v }}" {{ 'selected' if bmix_weeks == v }}>{{ lbl }}</option>
-      {% endfor %}
-    </select></div>
+  {{ period_filter('bmix', bmix_weeks, bmix_from, bmix_to, period_options) }}
   <div style="min-width:0"><button type="submit">Update</button></div>
 </form>
 
@@ -761,6 +777,17 @@ var BRANCH_ID_BY_CODE = { {% for b in branches %}"{{ b.code|upper }}": {{ b.id }
     if (!inp) return;
     inp.value = Math.max(8, Math.round(currentTop / 3));
     apply(['pie-panel'], e.target);
+  };
+
+  // Period preset select (Monthly sales / Mix branch / Branch performance):
+  // toggle its From/To pair immediately on the client so "Custom range"
+  // reveals them without waiting on the fetch round-trip - the server also
+  // renders the same visibility from the submitted value, so a plain
+  // (non-JS) form submit still lands in the right state.
+  window.periodPresetChanged = function(sel){
+    var wrap = sel.closest('form') && sel.closest('form').querySelector('.period-range');
+    if (wrap) wrap.style.display = (sel.value === 'custom') ? 'flex' : 'none';
+    sel.form.requestSubmit();
   };
 
   // delegated: forms are re-rendered on a #sales-panel swap, so bind on document
