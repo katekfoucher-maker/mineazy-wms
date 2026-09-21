@@ -53,7 +53,7 @@ def test_all_core_pages_render_with_erp_shell(web):
         # own heading, so check the exact nav-link text, not the page at large)
         assert "Active Back Orders</a>" not in r.text, path
         for label in ("Recon</a>", "Receiving Orders</a>", "Flow Analysis</a>",
-                      "Sales &amp; Forecasting</a>", "Reports &amp; Exports</a>"):
+                      "Allocation</a>", "Reports &amp; Exports</a>"):
             assert label in r.text, (path, label)
 
 
