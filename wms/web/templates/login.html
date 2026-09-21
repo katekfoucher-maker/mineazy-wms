@@ -18,7 +18,6 @@
         color:#fff;font:inherit;font-weight:600;cursor:pointer}
  button:hover{background:var(--brand)}
  .flash{margin-top:14px;padding:10px 12px;border-radius:9px;font-size:13px;background:#fee2e2;color:#b91c1c}
- .hint{margin-top:18px;font-size:12px;color:#9aa0b4}
 </style></head><body>
 <form class="box" method="post" action="/login">
   <div class="logo">M</div>
@@ -30,6 +29,5 @@
   <input name="password" type="password" autocomplete="current-password">
   <button type="submit">Sign in</button>
   {% for f in flashes %}<div class="flash">{{ f.m }}</div>{% endfor %}
-  <div class="hint">Demo: admin · controller · clerk · branch · analyst — password <code>wms1234</code></div>
 </form>
 </body></html>
