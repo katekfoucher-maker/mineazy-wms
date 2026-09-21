@@ -360,6 +360,79 @@ def save_month(branch_code: str, period, rows: pd.DataFrame) -> int:
         db.close()
 
 
+def merge_month(branch_code: str, period, rows: pd.DataFrame) -> int:
+    """Like :func:`save_month`, but for a branch-month that may already have
+    an earlier PARTIAL upload (e.g. "1 to 12 SEPTEMBER" already saved, now
+    "13 to 20 SEPTEMBER" arrives). ``save_month`` always replaces the whole
+    month wholesale, which is correct for a fresh/cumulative re-export but
+    would silently delete the earlier days' real sales if ``rows`` only
+    covers a later slice - exactly the destructive case this guards against.
+
+    * no existing rows for this (branch, period)   -> plain save.
+    * new day-range covers (>=) the existing one    -> a fresher cumulative
+      export supersedes the old one; plain replace.
+    * new day-range sits fully inside the existing one -> stale re-upload of
+      an already-covered slice; nothing to do, existing data kept as-is.
+    * new day-range is adjacent/non-overlapping     -> genuinely new days;
+      per-SKU qty/turnover/profit are SUMMED with the existing rows (both
+      are real, disjoint day-windows of the same month) and day_from/day_to
+      widen to cover both.
+    * any other (genuine) overlap                   -> ambiguous without
+      per-day data; refuses to guess and raises instead of risking silent
+      double-counting or loss.
+    """
+    from wms.db import SessionLocal
+    from wms.models import MonthlySalesLine
+
+    period_date = pd.Timestamp(period).date()
+    db = SessionLocal()
+    try:
+        existing = db.query(MonthlySalesLine).filter(
+            MonthlySalesLine.branch_code == branch_code,
+            MonthlySalesLine.period == period_date).all()
+    finally:
+        db.close()
+
+    if not existing:
+        return save_month(branch_code, period, rows)
+
+    new_from = int(rows["day_from"].iloc[0]) if len(rows) else 1
+    new_to = int(rows["day_to"].iloc[0]) if len(rows) else 1
+    old_from = min(int(r.day_from or 1) for r in existing)
+    old_to = max(int(r.day_to or 1) for r in existing)
+
+    if new_from <= old_from and new_to >= old_to:
+        return save_month(branch_code, period, rows)          # fresher cumulative export
+    if new_from >= old_from and new_to <= old_to:
+        return 0                                               # already covered, nothing to do
+    if new_from > old_to + 1 or new_to < old_from - 1:
+        raise ValueError(
+            f"{branch_code} {period_date}: new day range {new_from}-{new_to} doesn't "
+            f"connect to the existing {old_from}-{old_to} - refusing to guess how they "
+            "combine.")
+    if not (new_from == old_to + 1 or new_to == old_from - 1):
+        raise ValueError(
+            f"{branch_code} {period_date}: new day range {new_from}-{new_to} partially "
+            f"overlaps the existing {old_from}-{old_to} - refusing to guess the split "
+            "(would risk double-counting or losing real sales).")
+
+    old_df = pd.DataFrame([{
+        "sku": r.sku, "item": r.item, "qty": float(r.qty or 0),
+        "turnover": float(r.turnover or 0),
+        "profit": (float(r.profit) if r.profit is not None else None),
+        "gp_pct": (float(r.gp_pct) if r.gp_pct is not None else None),
+    } for r in existing])
+    merged = pd.concat([old_df, rows[["sku", "item", "qty", "turnover", "profit", "gp_pct"]]],
+                       ignore_index=True)
+    merged = (merged.groupby("sku", as_index=False)
+                    .agg(item=("item", "first"), qty=("qty", "sum"),
+                         turnover=("turnover", "sum"), profit=("profit", "sum"),
+                         gp_pct=("gp_pct", "mean")))
+    merged["day_from"] = min(new_from, old_from)
+    merged["day_to"] = max(new_to, old_to)
+    return save_month(branch_code, period, merged)
+
+
 def _load_panel_from_db() -> pd.DataFrame:
     from wms.db import SessionLocal
     from wms.models import MonthlySalesLine

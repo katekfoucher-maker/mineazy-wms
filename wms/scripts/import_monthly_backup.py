@@ -7,9 +7,11 @@ source Sales & Forecasting's monthly demand model reads.
 Filenames must carry a month and branch, e.g. "JULY 2025 BELMONT SALES.xlsx"
 - and should carry a YEAR too: older uploads that omit it default to 2026,
 but any file naming its year is read as that real year (a backup spanning
-2025-2026 is exactly what this was added for). Safe to re-run: each
-(branch, month) is replaced wholesale by whatever the file currently has,
-same as a fresh upload through the web app would do.
+2025-2026 is exactly what this was added for). Safe to re-run: a full-month
+file replaces whatever a branch-month already has, same as a fresh upload
+through the web app would do; a file naming an explicit day range (e.g.
+"13 TO 20 SEPTEMBER ...") is merged with an existing earlier/later partial
+month instead of replacing it - see monthly_sales.merge_month.
 """
 from __future__ import annotations
 
@@ -50,7 +52,7 @@ def run(directory: str, assume_yes: bool = False) -> None:
             continue
         bc, period = panel["branch_code"].iloc[0], panel["period"].iloc[0]
         try:
-            saved = monthly_sales.save_month(bc, period, panel)
+            saved = monthly_sales.merge_month(bc, period, panel)
         except Exception as e:                                # noqa: BLE001
             print(f"  ! FAILED: {os.path.basename(f)}: {e}")
             failed.append(os.path.basename(f))

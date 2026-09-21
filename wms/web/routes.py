@@ -1429,7 +1429,7 @@ def analytics_upload(request: Request, kind: str = Form(...),
                 raise ValueError("Could not read any product rows from that file.")
             period = rows["period"].iloc[0]
             day_from, day_to = int(rows["day_from"].iloc[0]), int(rows["day_to"].iloc[0])
-            n_saved = monthly_sales.save_month(bc, period, rows)
+            n_saved = monthly_sales.merge_month(bc, period, rows)
             demand_forecast._CACHE.clear()
             panel = monthly_sales.load_panel()
             mon_title = period.strftime("%B")
