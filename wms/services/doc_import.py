@@ -395,8 +395,30 @@ def _extract_lines_from_pages(pages: list[list[list[dict]]]) -> tuple[list[dict]
     if lines:
         return lines, meta, warnings
 
-    # no Item No / Req. Qty table anywhere - try the plain description+qty
-    # invoice shape instead (SKU manufactured from the description)
+    # no Item No / Req. Qty table anywhere - try a goods-receipt shape instead
+    # (Item Code / Description / Qty received, no req-vs-sent split, but a
+    # real Item Code column so the SKU doesn't have to be guessed)
+    anchors = None
+    for pno, rows_by_y in enumerate(pages):
+        if not rows_by_y:
+            continue
+        if pno == 0 and not any(meta.values()):
+            meta.update(_pdf_meta(rows_by_y))
+        hdr_idx, cols = _receipt_header(rows_by_y)
+        if cols:
+            anchors = cols
+        if anchors is None:
+            continue
+        for line in rows_by_y[(hdr_idx + 1) if hdr_idx is not None else 0:]:
+            rec = _receipt_row(line, anchors)
+            if rec:
+                lines.append(rec)
+
+    if lines:
+        return lines, meta, warnings
+
+    # still nothing - try the plain description+qty invoice shape instead
+    # (SKU manufactured from the description, no Item Code column at all)
     anchors = None
     for pno, rows_by_y in enumerate(pages):
         if not rows_by_y:
@@ -666,6 +688,56 @@ def _pdf_row(line: list[dict], a: dict) -> Optional[dict]:
     sent = _to_int(" ".join(sent_toks).replace(" ", ""))
     return {"sku": sku, "description": " ".join(desc_toks).strip(),
             "requested_qty": req, "sent_qty": sent, "sku_derived": False}
+
+
+def _receipt_header(rows_by_y: list[list[dict]]) -> tuple[Optional[int], Optional[dict]]:
+    """A goods-receipt table: Item Code | Description | Qty received - one
+    quantity column (what came in), not the dispatch note's Req./Sent pair.
+    "Qtd" (a common non-English abbreviation for quantity) counts as a qty
+    column here alongside "qty"/"quantity"/"receiv" so e.g. "Qtd Receiv." is
+    recognised."""
+    for i, line in enumerate(rows_by_y):
+        texts = {_norm(w["text"]): w for w in line}
+        joined = " ".join(texts)
+        if "item" not in joined or "descri" not in joined:
+            continue
+        qty_label = next((t for t in texts
+                           if t.startswith(("qtd", "qty", "quantity", "receiv"))), None)
+        if not qty_label:
+            continue
+
+        def cx(label):
+            w = next((w for t, w in texts.items() if t.startswith(label)), None)
+            return (w["x0"] + w["x1"]) / 2 if w else None
+
+        item_x = cx("item")
+        desc_x = cx("desc")
+        qty_x = (texts[qty_label]["x0"] + texts[qty_label]["x1"]) / 2
+        if item_x is None or desc_x is None:
+            continue
+        return i, {"item": item_x, "desc": desc_x, "qty": qty_x}
+    return None, None
+
+
+def _receipt_row(line: list[dict], anchors: dict) -> Optional[dict]:
+    keys = list(anchors.keys())
+    buckets: dict = {k: [] for k in keys}
+    for w in sorted(line, key=lambda w: w["x0"]):
+        t = w["text"].strip()
+        if not t:
+            continue
+        cx = (w["x0"] + w["x1"]) / 2
+        nearest = min(keys, key=lambda k: abs(anchors[k] - cx))
+        buckets[nearest].append(t)
+    sku = "".join(buckets.get("item", [])).strip()
+    if not sku or not _SKU_RX.match(sku):
+        return None
+    qty = _to_int(" ".join(buckets.get("qty", [])).replace(" ", ""))
+    if qty is None or qty <= 0:
+        return None
+    desc = " ".join(buckets.get("desc", [])).strip()
+    return {"sku": sku, "description": desc, "requested_qty": qty, "sent_qty": qty,
+            "sku_derived": False}
 
 
 def _pdf_meta(rows_by_y: list[list[dict]]) -> dict:
