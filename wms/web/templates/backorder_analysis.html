@@ -203,7 +203,6 @@
       <option value="inventory" {{ 'selected' if fa_metric == 'inventory' }}>Inventory (on hand)</option>
       <option value="both" {{ 'selected' if fa_metric == 'both' }}>Sales + inventory</option>
     </select></div>
-  {{ period_filter('fa', fa_weeks, fa_from, fa_to, period_options) }}
   <div style="min-width:0"><button type="submit">Show</button></div>
 </form>
 
@@ -215,7 +214,6 @@
 <div class="card" id="sales-chart-card">
   <div class="card-head">
     <h3>{{ _title }} ({{ sales_series.branch_label }}, {{ sales_series.sku_label }})</h3>
-    {% if sales_series.period_label %}<span class="muted" style="font-size:12px">{{ sales_series.period_label }}</span>{% endif %}
   </div>
   <div style="overflow-x:auto">
     <svg viewBox="0 0 {{ g.w }} {{ g.h }}" width="100%" preserveAspectRatio="xMidYMid meet"
