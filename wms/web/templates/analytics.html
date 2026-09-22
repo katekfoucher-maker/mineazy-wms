@@ -141,9 +141,9 @@ function upName(inp){
           enctype="multipart/form-data">
 
       <div style="margin-bottom:12px">
-        <label style="margin-bottom:6px">Warehouse stock</label>
         <select name="stock_mode" id="stock-mode-select" onchange="stockModeChanged(this)">
-          <option value="upload" selected>Custom Split</option>
+          <option value="" selected disabled>Choose allocation</option>
+          <option value="upload">Custom Split</option>
           <option value="receiving">Use Inventory</option>
         </select>
       </div>
@@ -159,7 +159,7 @@ function upName(inp){
         </select>
       </div>
 
-      <div id="src-upload-box" style="margin-bottom:12px">
+      <div id="src-upload-box" hidden style="margin-bottom:12px">
         <label class="drop">
           <span class="name" data-placeholder="Choose a stock list file">Choose a stock list file</span>
           <input type="file" name="stock_file" accept=".csv,.tsv,.xlsx,.xls,.pdf" onchange="upName(this)">
@@ -172,11 +172,14 @@ function upName(inp){
         var roSel = document.getElementById('ro-select');
         var fileInp = ub ? ub.querySelector('input[type="file"]') : null;
         var upload = sel.value === 'upload';
-        if (rb) rb.hidden = upload;
+        // "Use Inventory" has no picker yet - the Warehouse Inventory spec
+        // it'll actually read from isn't built yet, so this box stays
+        // hidden for every mode until then, not just upload/custom-split.
+        if (rb) rb.hidden = true;
         if (ub) ub.hidden = !upload;
         // clear whichever field is now hidden, so a leftover selection from
         // before a mode switch never silently overrides the visible one
-        if (upload && roSel) roSel.value = '';
+        if (roSel) roSel.value = '';
         if (!upload && fileInp) { fileInp.value = ''; upName(fileInp); }
       }
       </script>
