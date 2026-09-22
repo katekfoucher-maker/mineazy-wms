@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # weekly allocation tops branches up to cover the review week PLUS this, so
     # they never run dry while a transfer is on the road.
     dispatch_transit_days: int = 3
+    # Temporary: stock-on-hand data generally isn't trusted right now, so
+    # allocation runs on sales/demand alone - every branch's on-hand reads as
+    # 0 for allocation math (see stock.levels_df_for_allocation), meaning
+    # "target" is sent in full regardless of what's already on the shelf.
+    # Flip back to True once stock-on-hand is trustworthy again; the
+    # Inventory page's own numbers are unaffected either way.
+    allocation_use_inventory: bool = False
     # Restocking bias. It is safer to over-forecast than to run a branch dry, so
     # the forecast is calibrated to this PRE-FLOOR margin versus the reference
     # sales level; the min-units floor below then lifts the served total further

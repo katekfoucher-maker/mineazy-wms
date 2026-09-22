@@ -5,15 +5,20 @@ import pytest
 from wms.analytics.allocation import _split_capped
 
 
-def test_levels_df_for_allocation_zeroes_belmont_but_not_plain_levels_df(seeded):
+def test_levels_df_for_allocation_zeroes_belmont_but_not_plain_levels_df(seeded, monkeypatch):
     """Belmont's stock-on-hand isn't reliable enough to trust for allocation
     (see UNRELIABLE_FOR_ALLOCATION) - the allocation-flavoured lookup must
     zero it, while the plain lookup (Inventory page, coverage()) keeps
-    showing the real figure."""
+    showing the real figure. Tested with the network-wide
+    allocation_use_inventory switch explicitly back on, since the current
+    default (off) would zero every branch and make this Belmont-specific
+    check meaningless - see the dedicated test for that switch below."""
+    from wms.config import get_settings
     from wms.db import get_session
     from wms.models import Branch, StockOnHand
     from wms.services import stock as stock_svc
 
+    monkeypatch.setattr(get_settings(), "allocation_use_inventory", True)
     db = next(get_session())
     bm = db.query(Branch).filter(Branch.code == "BM").first()
     other = db.query(Branch).filter(Branch.code != "BM").first()
@@ -41,6 +46,42 @@ def test_levels_df_for_allocation_zeroes_belmont_but_not_plain_levels_df(seeded)
     for b in (bm, other):
         db.query(StockOnHand).filter(StockOnHand.branch_id == b.id,
                                      StockOnHand.sku == "TEST-ALLOC-SKU").delete()
+    db.commit()
+
+
+def test_allocation_use_inventory_off_zeroes_every_branch(seeded):
+    """The current default: stock-on-hand isn't trusted network-wide, so
+    allocation runs on sales/demand alone - EVERY branch's on-hand reads as
+    0 for allocation math, not just Belmont's. The plain lookup (Inventory
+    page) is unaffected."""
+    from wms.config import get_settings
+    from wms.db import get_session
+    from wms.models import Branch, StockOnHand
+    from wms.services import stock as stock_svc
+
+    assert get_settings().allocation_use_inventory is False    # the current default
+
+    db = next(get_session())
+    a = db.query(Branch).filter(Branch.code == "BM").first()
+    b = db.query(Branch).filter(Branch.code != "BM").first()
+    for br in (a, b):
+        db.query(StockOnHand).filter(StockOnHand.branch_id == br.id,
+                                     StockOnHand.sku == "TEST-NOINV-SKU").delete()
+    db.add(StockOnHand(branch_id=a.id, sku="TEST-NOINV-SKU", qty_on_hand=42))
+    db.add(StockOnHand(branch_id=b.id, sku="TEST-NOINV-SKU", qty_on_hand=17))
+    db.commit()
+
+    real = stock_svc.levels_df(db)
+    alloc = stock_svc.levels_df_for_allocation(db)
+    for code, want_real in ((a.code, 42), (b.code, 17)):
+        r = real[(real.branch_code == code) & (real.sku == "TEST-NOINV-SKU")]
+        al = alloc[(alloc.branch_code == code) & (alloc.sku == "TEST-NOINV-SKU")]
+        assert int(r["on_hand"].iloc[0]) == want_real     # plain lookup: real figure
+        assert int(al["on_hand"].iloc[0]) == 0             # allocation lookup: zeroed
+
+    for br in (a, b):
+        db.query(StockOnHand).filter(StockOnHand.branch_id == br.id,
+                                     StockOnHand.sku == "TEST-NOINV-SKU").delete()
     db.commit()
 
 

@@ -17,6 +17,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from wms.audit import write_audit
+from wms.config import get_settings
 from wms.models import Branch, StockOnHand
 
 
@@ -104,13 +105,28 @@ UNRELIABLE_FOR_ALLOCATION = {"BM"}         # Belmont Shop
 
 
 def levels_df_for_allocation(db: Session) -> pd.DataFrame:
-    """Like :func:`levels_df`, but zeroes the on-hand of branches in
-    ``UNRELIABLE_FOR_ALLOCATION``. Allocation treats a zeroed branch as if
-    nothing were on its shelf - the conservative reading ("send the full
+    """Like :func:`levels_df`, but zeroes on-hand wherever it isn't reliable
+    enough to use for allocation math. Allocation treats a zeroed branch as
+    if nothing were on its shelf - the conservative reading ("send the full
     target") rather than letting a number nobody trusts suppress what gets
-    sent there. The real stock_on_hand rows are untouched."""
+    sent there. The real stock_on_hand rows are untouched - read-only views
+    (the Inventory page, coverage() below) still show the real figure via
+    plain levels_df().
+
+    ``allocation_use_inventory=False`` (see wms.config) zeroes EVERY branch -
+    a temporary network-wide switch for while stock-on-hand data generally
+    isn't trusted, so allocation runs on sales/demand alone. It's checked
+    ahead of the narrower ``UNRELIABLE_FOR_ALLOCATION`` list (Belmont) so
+    that list stays in place, ready to matter again the moment inventory
+    data is switched back on."""
     df = levels_df(db)
-    if df.empty or not UNRELIABLE_FOR_ALLOCATION:
+    if df.empty:
+        return df
+    if not getattr(get_settings(), "allocation_use_inventory", True):
+        df = df.copy()
+        df["on_hand"] = 0
+        return df
+    if not UNRELIABLE_FOR_ALLOCATION:
         return df
     df = df.copy()
     df.loc[df["branch_code"].str.upper().isin(UNRELIABLE_FOR_ALLOCATION), "on_hand"] = 0
