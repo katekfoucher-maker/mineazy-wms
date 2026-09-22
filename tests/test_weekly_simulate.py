@@ -23,7 +23,7 @@ def _month_file(path, rows):
 
 def _upload_week(branch_code, filename, rows):
     """Push one real weekly-sales file straight into WeeklySalesLine, the same
-    way the /analytics/upload-weekly route does - real weekly data is
+    way the /allocation/upload-weekly route does - real weekly data is
     database-only now, same as the simulated rows it sits alongside."""
     buf = io.BytesIO()
     with pd.ExcelWriter(buf) as xl:
@@ -246,7 +246,7 @@ def test_a_partial_month_export_only_simulates_the_days_it_covers(_isolate):
 def test_upload_monthly_sales_route_works_without_a_ui_card(_isolate, seeded):
     """The 'Monthly sales' upload form was dropped from the Sales & Forecasting
     page (the weekly-sales upload is the front door now), but the underlying
-    POST /analytics/upload (kind=sales) route must keep working - a branch's
+    POST /allocation/upload (kind=sales) route must keep working - a branch's
     history still arrives this way whenever a real weekly export isn't ready
     yet. The route writes straight into MonthlySalesLine now, not a file - see
     monthly_sales.parse_upload / save_month. It deliberately does NOT trigger
@@ -269,7 +269,7 @@ def test_upload_monthly_sales_route_works_without_a_ui_card(_isolate, seeded):
     with pd.ExcelWriter(buf) as xl:
         df.to_excel(xl, sheet_name="Item Statistics", index=False)
 
-    r = c.post("/analytics/upload",
+    r = c.post("/allocation/upload",
               data={"kind": "sales", "branch_code": "BM"},
               files={"file": ("MAY BM SALES.xlsx", buf.getvalue(),
                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},

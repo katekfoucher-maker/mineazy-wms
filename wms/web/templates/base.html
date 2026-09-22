@@ -201,19 +201,19 @@
 {% set P = request.url.path %}
 <div class="shell">
   <aside class="sidebar">
-    <div class="brand">Sales and Forecasting</div>
+    <div class="brand">Mineazy</div>
     <nav class="nav">
       {# Active Back Orders is temporarily removed from the nav - its
          routes/data are untouched, just not linked from here for now #}
-      <a href="/analytics" class="{{ 'on' if P.startswith('/analytics') }}">
+      <a href="/allocation" class="{{ 'on' if P.startswith('/allocation') }}">
         {{ m.ic('chart') }} Allocation</a>
       <a href="/analysis" class="{{ 'on' if P.startswith('/analysis') }}">
         {{ m.ic('flow') }} Flow Analysis</a>
       {% if can(user.role, 'nav.full') %}
-      <a href="/receiving/new" class="{{ 'on' if P.startswith('/receiving') }}">
+      <a href="/warehouse" class="{{ 'on' if P.startswith('/warehouse') }}">
         {{ m.ic('inbox') }} Warehouse</a>
       {% endif %}
-      <a href="/inventory" class="{{ 'on' if P.startswith('/inventory') }}">
+      <a href="/branches" class="{{ 'on' if P.startswith('/branches') }}">
         {{ m.ic('box') }} Branches</a>
       {% if can(user.role, 'nav.full') %}
       <a href="/products" class="{{ 'on' if P.startswith('/products') }}">

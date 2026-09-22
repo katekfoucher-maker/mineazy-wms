@@ -659,21 +659,29 @@ def _receiving_ctx(db, prefill=None, tab: str = "upload", wh_q: str = "") -> dic
                 dispatches=_recent_dispatches_recon(db) if tab == "recon" else [])
 
 
-@router.get("/receiving/new")
+@router.get("/warehouse")
 def receiving_new(request: Request, tab: str = "upload", wh_q: str = "",
                   db: Session = Depends(db_session),
                   user: User = Depends(require_perm("receiving.enter"))):
     return render(request, "receiving_new.html", user, **_receiving_ctx(db, tab=tab, wh_q=wh_q))
 
 
+@router.get("/receiving/new")
+def receiving_new_redirect(request: Request):
+    """The page moved to /warehouse; keep the old URL working for anyone
+    with it bookmarked."""
+    qs = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(f"/warehouse{qs}", 303)
+
+
 @router.get("/recon/new")
 def recon_new_redirect():
     """Recon now lives as a tab of the Warehouse page; keep the old URL
     working for anyone with it bookmarked."""
-    return RedirectResponse("/receiving/new?tab=recon", 303)
+    return RedirectResponse("/warehouse?tab=recon", 303)
 
 
-@router.post("/receiving/new/upload")
+@router.post("/warehouse/upload")
 def receiving_upload(request: Request, files: list[UploadFile] = File(...),
                      db: Session = Depends(db_session),
                      user: User = Depends(require_perm("receiving.enter"))):
@@ -724,7 +732,7 @@ def receiving_upload(request: Request, files: list[UploadFile] = File(...),
     return render(request, "receiving_new.html", user, **_receiving_ctx(db, prefill))
 
 
-@router.post("/receiving/new")
+@router.post("/warehouse")
 def receiving_create(request: Request, branch_id: int = Form(...),
                      ro_no: str = Form(""), doc_date: str = Form(""),
                      supplier: str = Form(""), notes: str = Form(""),
@@ -745,7 +753,7 @@ def receiving_create(request: Request, branch_id: int = Form(...),
             lines=lines, user_id=user.id)
         flash(request, f"{ro.ro_no}: {ro.total_received} unit(s) added to "
                        f"{ro.branch.name} stock.", "success")
-        return RedirectResponse("/receiving/new", 303)
+        return RedirectResponse("/warehouse", 303)
     except Exception as e:
         db.rollback()
         flash(request, str(e), "error")
@@ -758,7 +766,7 @@ def receiving_create(request: Request, branch_id: int = Form(...),
         return render(request, "receiving_new.html", user, **_receiving_ctx(db, prefill))
 
 
-@router.post("/receiving/{ro_no}/delete")
+@router.post("/warehouse/{ro_no}/delete")
 def receiving_delete(ro_no: str, request: Request, db: Session = Depends(db_session),
                      user: User = Depends(require_perm("receiving.enter"))):
     """Reverse a receiving order: pull its units back out of stock, then delete it."""
@@ -770,7 +778,7 @@ def receiving_delete(ro_no: str, request: Request, db: Session = Depends(db_sess
     except Exception as e:
         db.rollback()
         flash(request, str(e), "error")
-    return RedirectResponse("/receiving/new", 303)
+    return RedirectResponse("/warehouse", 303)
 
 
 # ======================================================================
@@ -789,7 +797,7 @@ def _recent_dispatches_recon(db, limit: int = 40) -> list[dict]:
     } for do in rows]
 
 
-@router.post("/recon/new/upload")
+@router.post("/warehouse/recon/upload")
 def recon_upload(request: Request, files: list[UploadFile] = File(...),
                  db: Session = Depends(db_session),
                  user: User = Depends(require_perm("receiving.enter"))):
@@ -840,7 +848,7 @@ def recon_upload(request: Request, files: list[UploadFile] = File(...),
     return render(request, "receiving_new.html", user, **_receiving_ctx(db, prefill=prefill, tab="recon"))
 
 
-@router.post("/recon/new")
+@router.post("/warehouse/recon")
 def recon_create(request: Request, branch_id: int = Form(...),
                  do_no: str = Form(""), doc_date: str = Form(""),
                  notes: str = Form(""),
@@ -862,7 +870,7 @@ def recon_create(request: Request, branch_id: int = Form(...),
             flash(request, w, "info")
         flash(request, f"{do.do_no}: {do.total_dispatched} unit(s) dispatched to "
                        f"{do.branch.name}.", "success")
-        return RedirectResponse("/receiving/new?tab=recon", 303)
+        return RedirectResponse("/warehouse?tab=recon", 303)
     except Exception as e:
         db.rollback()
         flash(request, str(e), "error")
@@ -875,7 +883,7 @@ def recon_create(request: Request, branch_id: int = Form(...),
         return render(request, "receiving_new.html", user, **_receiving_ctx(db, prefill=prefill, tab="recon"))
 
 
-@router.post("/recon/{do_no}/delete")
+@router.post("/warehouse/recon/{do_no}/delete")
 def recon_delete(do_no: str, request: Request, db: Session = Depends(db_session),
                  user: User = Depends(require_perm("receiving.enter"))):
     """Reverse a dispatch order: return its units to the warehouse, then delete it."""
@@ -887,7 +895,7 @@ def recon_delete(do_no: str, request: Request, db: Session = Depends(db_session)
     except Exception as e:
         db.rollback()
         flash(request, str(e), "error")
-    return RedirectResponse("/receiving/new?tab=recon", 303)
+    return RedirectResponse("/warehouse?tab=recon", 303)
 
 
 @router.get("/backorders/{bo_no}")
@@ -990,7 +998,7 @@ def _alloc_ctx(db, *, bcode: str = "", q: str = "", alloc_sku: str = "",
         abc=abc, alloc_class=alloc_class, receipts=_recent_receiving(db))
 
 
-@router.get("/analytics")
+@router.get("/allocation")
 def analytics(request: Request, tab: str = "", branch_id: str = "",
               bcode: str = "", q: str = "", alloc_sku: str = "", alloc_qty: str = "",
               alloc_branches: list[str] = Query(default_factory=list),
@@ -998,7 +1006,7 @@ def analytics(request: Request, tab: str = "", branch_id: str = "",
     branches = db.query(Branch).order_by(Branch.name).all()
 
     if tab != "demand":
-        # default view: the allocation plan (bare /analytics, tab=allocation,
+        # default view: the allocation plan (bare /allocation, tab=allocation,
         # or any other/unrecognised tab value all land here)
         return render(request, "analytics.html", user,
                       **_alloc_ctx(db, bcode=bcode, q=q, alloc_sku=alloc_sku,
@@ -1021,6 +1029,14 @@ def analytics(request: Request, tab: str = "", branch_id: str = "",
                   bcode=bcode, q=q, inv_cov=_stock_cov(db),
                   has_weekly=weekly_fc.has_data(),
                   fc_cols=fc_cols, fc_total=fc_total, forecast_rows=forecast_rows)
+
+
+@router.get("/analytics")
+def analytics_redirect(request: Request):
+    """The page moved to /allocation; keep the old URL working for anyone
+    with it bookmarked."""
+    qs = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(f"/allocation{qs}", 303)
 
 
 def _run_split_batch(db, pairs, brs: list[str]) -> dict:
@@ -1395,7 +1411,7 @@ def _dc_stock_pairs(db) -> list[tuple[str, int]]:
     return [(sku, qty) for sku, qty in rows if qty]
 
 
-@router.post("/analytics/split")
+@router.post("/allocation/split")
 def analytics_split(request: Request,
                     split_mode: str = Form("oneoff"),
                     stock_file: UploadFile = File(None),
@@ -1523,7 +1539,7 @@ def download_split_result(fmt: str = "xlsx",
     from wms.config import get_settings
     p = pathlib.Path(get_settings().out) / "_last_split.json"
     if not p.exists():
-        raise Redirect("/analytics?tab=allocation")
+        raise Redirect("/allocation?tab=allocation")
     batch = json.loads(p.read_text(encoding="utf-8"))
     if fmt == "pdf":
         if batch.get("weekly") and batch.get("by_branch"):
@@ -1545,7 +1561,7 @@ def _load_last_split() -> dict:
     from wms.config import get_settings
     p = pathlib.Path(get_settings().out) / "_last_split.json"
     if not p.exists():
-        raise Redirect("/analytics?tab=allocation")
+        raise Redirect("/allocation?tab=allocation")
     return json.loads(p.read_text(encoding="utf-8"))
 
 
@@ -1560,7 +1576,7 @@ def download_split_result_branch(code: str, fmt: str = "pdf",
     bb = next((b for b in by_branch
               if str(b.get("code") or "").upper() == code.strip().upper()), None)
     if bb is None:
-        raise Redirect("/analytics?tab=allocation")
+        raise Redirect("/allocation?tab=allocation")
     doc_title = "Weekly order" if batch.get("weekly") else "Split allocation"
     if fmt == "xlsx":
         path = excel.weekly_dispatch_branch_workbook(bb, doc_title=doc_title)
@@ -1582,7 +1598,7 @@ def download_split_result_zip(doc: str = "pdf",
     batch = _load_last_split()
     by_branch = batch.get("by_branch") or []
     if not by_branch:
-        raise Redirect("/analytics?tab=allocation")
+        raise Redirect("/allocation?tab=allocation")
     doc_title = "Weekly order" if batch.get("weekly") else "Split allocation"
 
     zpath = (pathlib.Path(get_settings().out)
@@ -1602,7 +1618,7 @@ def download_split_result_zip(doc: str = "pdf",
     return FileResponse(zpath, media_type="application/zip", filename=zpath.name)
 
 
-@router.post("/analytics/upload")
+@router.post("/allocation/upload")
 def analytics_upload(request: Request, kind: str = Form(...),
                      branch_code: str = Form(""), file: UploadFile = File(...),
                      db: Session = Depends(db_session),
@@ -1625,8 +1641,8 @@ def analytics_upload(request: Request, kind: str = Form(...),
                 items=[{"sku": r.sku, "qty": int(r.on_hand)}
                        for r in bslice.itertuples()], user_id=user.id)
             flash(request, f"Inventory for {bc}: {rows} product line(s) loaded, "
-                           f"see the Inventory page.", "success")
-            return RedirectResponse("/inventory", 303)
+                           f"see the Branches page.", "success")
+            return RedirectResponse("/branches", 303)
 
         if kind == "sales":
             bc = branch_code.strip().upper()
@@ -1649,12 +1665,12 @@ def analytics_upload(request: Request, kind: str = Form(...),
             msg = (f"Sales for {bc} {period_lbl} added ({n_saved} line(s)), history now "
                   f"{monthly_sales.coverage(panel).get('month_range', '')}.")
             flash(request, msg, "success")
-            return RedirectResponse("/analytics?tab=demand", 303)
+            return RedirectResponse("/allocation?tab=demand", 303)
 
         raise ValueError("Unknown upload type.")
     except Exception as e:
         flash(request, f"Upload failed: {e}", "error")
-        back = "/inventory" if kind == "inventory" else "/analytics?tab=demand"
+        back = "/branches" if kind == "inventory" else "/allocation?tab=demand"
         return RedirectResponse(back, 303)
 
 
@@ -1672,7 +1688,7 @@ def _retrain_weekly_model_in_background() -> None:
         warnings.warn(f"weekly auto-retrain failed: {e}")
 
 
-@router.post("/analytics/upload-weekly")
+@router.post("/allocation/upload-weekly")
 def analytics_upload_weekly(request: Request, background_tasks: BackgroundTasks,
                             files: list[UploadFile] = File(...),
                             branch_code: str = Form(""),
@@ -1716,10 +1732,10 @@ def analytics_upload_weekly(request: Request, background_tasks: BackgroundTasks,
               + (" …" if len(skipped) > 6 else ""), "error")
     if not saved and not skipped:
         flash(request, "No files received.", "error")
-    return RedirectResponse("/analytics?tab=demand", 303)
+    return RedirectResponse("/allocation?tab=demand", 303)
 
 
-@router.post("/analytics/upload-weekly-inventory")
+@router.post("/allocation/upload-weekly-inventory")
 def analytics_upload_weekly_inventory(request: Request,
                                       files: list[UploadFile] = File(...),
                                       branch_code: str = Form(""),
@@ -1756,13 +1772,13 @@ def analytics_upload_weekly_inventory(request: Request,
               + (" …" if len(skipped) > 6 else ""), "error")
     if not saved and not skipped:
         flash(request, "No files received.", "error")
-    return RedirectResponse("/analytics?tab=demand", 303)
+    return RedirectResponse("/allocation?tab=demand", 303)
 
 
 # ======================================================================
 # INVENTORY
 # ======================================================================
-@router.get("/inventory")
+@router.get("/branches")
 def inventory_page(request: Request, bcode: str = "", q: str = "", low_bcode: str = "",
                    excess_bcode: str = "",
                    db: Session = Depends(db_session),
@@ -1818,6 +1834,14 @@ def inventory_page(request: Request, bcode: str = "", q: str = "", low_bcode: st
                   low_bcode=low_bcode,
                   excess=weekly_fc.excess_stock(db, bcode=excess_bcode),
                   excess_bcode=excess_bcode)
+
+
+@router.get("/inventory")
+def inventory_page_redirect(request: Request):
+    """The page moved to /branches; keep the old URL working for anyone
+    with it bookmarked."""
+    qs = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(f"/branches{qs}", 303)
 
 
 # ======================================================================

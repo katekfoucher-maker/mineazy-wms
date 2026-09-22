@@ -42,7 +42,7 @@ def test_all_core_pages_render_with_erp_shell(web):
     for path in ["/backorders", "/backorders?stage=OPEN", "/analysis",
                  "/dispatch/new", "/backorders/new", "/backorders/BO-000001",
                  "/delivery-notes/26503244",
-                 "/analytics", "/analytics?tab=demand", "/analytics?tab=allocation",
+                 "/allocation", "/allocation?tab=demand", "/allocation?tab=allocation",
                  "/reports"]:
         r = web.get(path)
         assert r.status_code == 200, path
@@ -194,16 +194,16 @@ def test_flow_analysis_retrain_route(web, monkeypatch):
 
 def test_allocation_tab_has_weekly_plan_no_upload(web):
     _login(web, "controller")
-    r = web.get("/analytics?tab=allocation")
+    r = web.get("/allocation?tab=allocation")
     assert r.status_code == 200
     assert "Split by predicted sales" in r.text           # the one card on this tab
     assert "Weekly orders" not in r.text                  # standalone card removed
-    assert 'action="/analytics/order-request"' not in r.text
-    assert 'action="/analytics/upload"' not in r.text     # inventory upload lives on Demand
+    assert 'action="/allocation/order-request"' not in r.text
+    assert 'action="/allocation/upload"' not in r.text     # inventory upload lives on Demand
     assert 'class="btn ghost dl-alloc"' not in r.text     # Excel button removed
     assert 'href="/download/allocation-plan?bcode' not in r.text
     assert 'id="fx-panel"' not in r.text                  # per-location plan table removed
-    assert 'action="/analytics/split"' in r.text          # unified split form
+    assert 'action="/allocation/split"' in r.text          # unified split form
     assert 'id="split-mode"' in r.text                    # One off / Weekly order
     # one selection box: pick a real Receiving Order to split, or upload a
     # quick one-off stock list instead
@@ -224,7 +224,7 @@ def test_split_upload_splits_each_line_by_predicted_sales(web):
 
     _login(web, "controller")
     body = f"SKU,Quantity\n{sku},600\n".encode()
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "oneoff"},
                  files={"stock_file": ("split_list.csv", io.BytesIO(body), "text/csv")})
     assert r.status_code == 200
@@ -240,9 +240,9 @@ def test_split_upload_splits_each_line_by_predicted_sales(web):
 
 def test_demand_tab_has_weekly_upload(web):
     _login(web, "controller")
-    r = web.get("/analytics?tab=demand")
+    r = web.get("/allocation?tab=demand")
     assert r.status_code == 200
-    assert 'action="/analytics/upload-weekly"' in r.text          # weekly sales
+    assert 'action="/allocation/upload-weekly"' in r.text          # weekly sales
     # branch inventory now has its own page (see test_inventory_page_has_upload)
     assert 'name="kind" value="inventory"' not in r.text
     # the monthly-sales upload has no UI card (weekly upload is the front door),
@@ -265,7 +265,7 @@ def test_forecast_by_product_lists_every_branch(web, db):
         import pytest
         pytest.skip("no weekly_sales files present")
     _login(web, "controller")
-    r = web.get("/analytics?tab=demand")
+    r = web.get("/allocation?tab=demand")
     assert r.status_code == 200
 
     # every branch in the DB is a selectable option, not just two hardcoded ones
@@ -289,7 +289,7 @@ def test_abc_classification_removed_from_ui_but_kept_in_backend(web):
         import pytest
         pytest.skip("no weekly_sales files present")
     _login(web, "controller")
-    r = web.get("/analytics?tab=allocation")
+    r = web.get("/allocation?tab=allocation")
     assert r.status_code == 200
     assert "Equipment classification (ABC)" not in r.text
     assert 'name="abc_class"' not in r.text and 'name="abc_q"' not in r.text
@@ -309,7 +309,7 @@ def test_allocation_split_tool_splits_by_predicted_sales(web):
     sku = st.groupby("sku")["weekly_demand"].sum().idxmax()
 
     _login(web, "controller")
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "oneoff", "man_sku": str(sku), "man_qty": "40"})
     assert r.status_code == 200
     body = r.text.split("Split result,")[1]
@@ -345,7 +345,7 @@ def test_allocation_split_holds_back_slow_mover_stock(web):
     sku = slow.index[0]
 
     _login(web, "controller")
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "oneoff", "man_sku": str(sku), "man_qty": "50"})
     assert r.status_code == 200
     body = r.text.split("Split result,")[1]
@@ -368,7 +368,7 @@ def test_weekly_order_generates_without_branch_files(web, db):
         import pytest
         pytest.skip("no weekly_sales files present")
     _login(web, "controller")
-    r = web.post("/analytics/split", data={"split_mode": "weekly"})
+    r = web.post("/allocation/split", data={"split_mode": "weekly"})
     assert r.status_code == 200
     assert "Add at least one branch order file" not in r.text
     assert "system-generated" in r.text
@@ -388,7 +388,7 @@ def test_weekly_order_scopes_to_the_selected_branch(web, db):
         import pytest
         pytest.skip("no weekly_sales files present")
     _login(web, "controller")
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "weekly", "split_branches": "BM"})
     assert r.status_code == 200
     other_branches = [b.name for b in db.query(Branch).all() if b.code != "BM"]
@@ -428,7 +428,7 @@ def test_weekly_order_route_caps_to_uploaded_warehouse_stock(web, db):
     half = full_need // 2
 
     _login(web, "controller")
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "weekly", "man_sku": str(sku), "man_qty": str(half)})
     assert r.status_code == 200
     assert "capped to warehouse stock" in r.text
@@ -540,7 +540,7 @@ def test_inventory_upload_feeds_the_weekly_plan(web, db, tmp_path, monkeypatch):
     pd.DataFrame({"Item No": bm.sku, "Qty": [1] * len(bm)}).to_excel(xl, index=False)
     xl.seek(0)
     try:
-        up = web.post("/analytics/upload",
+        up = web.post("/allocation/upload",
                       data={"kind": "inventory", "branch_code": "BM"},
                       files={"file": ("BM.xlsx", xl,
                              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
@@ -583,9 +583,9 @@ def test_inventory_page_shows_branch_summary_and_upload(web, db, tmp_path, monke
     monkeypatch.setattr(inv_mod, "inventory_dir", lambda: tmp_path)
     _login(web, "controller")
 
-    r = web.get("/inventory")
+    r = web.get("/branches")
     assert r.status_code == 200
-    assert 'action="/analytics/upload"' in r.text
+    assert 'action="/allocation/upload"' in r.text
     assert 'name="kind" value="inventory"' in r.text          # upload moved here
     assert "branch(es) reporting stock" not in r.text           # summary line removed
     assert '<th class="num">Product lines</th>' not in r.text and "Last updated" not in r.text  # per-branch table removed
@@ -608,21 +608,21 @@ def test_inventory_page_shows_branch_summary_and_upload(web, db, tmp_path, monke
     pd.DataFrame({"Item No": ["ZZZ-TEST-SKU"], "Qty": [7]}).to_excel(xl, index=False)
     xl.seek(0)
     try:
-        up = web.post("/analytics/upload",
+        up = web.post("/allocation/upload",
                       data={"kind": "inventory", "branch_code": "BM"},
                       files={"file": ("BM.xlsx", xl,
                              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
                       follow_redirects=True)
         assert up.status_code == 200
-        assert up.request.url.path == "/inventory"        # the upload redirects here now
+        assert up.request.url.path == "/branches"        # the upload redirects here now
 
-        page = web.get("/inventory")
+        page = web.get("/branches")
         assert "ZZZ-TEST-SKU" in page.text
 
-        only_bm = web.get("/inventory?bcode=BM&q=ZZZ-TEST")
+        only_bm = web.get("/branches?bcode=BM&q=ZZZ-TEST")
         assert "ZZZ-TEST-SKU" in only_bm.text
 
-        none_match = web.get("/inventory?q=NOT-A-REAL-SKU-XYZ")
+        none_match = web.get("/branches?q=NOT-A-REAL-SKU-XYZ")
         assert "Nothing matches" in none_match.text
     finally:
         bm_id = db.query(Branch).filter(Branch.code == "BM").scalar().id
@@ -873,7 +873,7 @@ def test_split_by_sales_branches_and_export(web):
     _login(web, "controller")
     # the unified split form carries a branch multi-select, and a one-off result
     # offers a single combined document (one Excel + one PDF) for the whole split
-    page = web.post("/analytics/split",
+    page = web.post("/allocation/split",
                     data={"split_mode": "oneoff", "man_sku": "WIN001",
                           "man_qty": "1000", "split_branches": "BM"}).text
     assert 'type="checkbox" name="split_branches"' in page
@@ -914,7 +914,7 @@ def test_oneoff_split_sort_by_branch_and_per_branch_downloads(web):
     sku = st.groupby("sku")["weekly_demand"].sum().idxmax()   # a real fast mover
 
     _login(web, "controller")
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "oneoff", "man_sku": str(sku), "man_qty": "5000"})
     assert r.status_code == 200
     assert 'id="sort-toggle"' in r.text
@@ -941,7 +941,7 @@ def test_oneoff_split_sort_by_branch_and_per_branch_downloads(web):
 
 def test_unified_split_one_off_and_result_export(web):
     _login(web, "controller")
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "oneoff",
                        "man_sku": "WIN001", "man_qty": "40"})
     assert r.status_code == 200
@@ -958,7 +958,7 @@ def test_unified_split_weekly_order_mode(web):
     import io
     _login(web, "controller")
     order = io.BytesIO(b"Item No,Description,Requested\nWIN001,WINPOW,20\n")
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "weekly",
                        "man_sku": "WIN001", "man_qty": "100",
                        "wk_branch": "BM"},
@@ -981,7 +981,7 @@ def test_weekly_order_zip_and_per_branch_downloads(web):
     _login(web, "controller")
     bm_order = io.BytesIO(b"Item No,Description,Requested\nWIN001,WINPOW,20\n")
     mp_order = io.BytesIO(b"Item No,Description,Requested\nWIN001,WINPOW,10\n")
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "weekly",
                        "man_sku": "WIN001", "man_qty": "100",
                        "wk_branch": ["BM", "MP"]},
@@ -1029,7 +1029,7 @@ def test_weekly_order_works_without_any_inventory_data(web, monkeypatch):
     monkeypatch.setattr(wr, "_dc_stock_pairs", lambda db: [])
     _login(web, "controller")
     order = io.BytesIO(b"Item No,Description,Requested\nWIN001,WINPOW,20\n")
-    r = web.post("/analytics/split",
+    r = web.post("/allocation/split",
                  data={"split_mode": "weekly", "wk_branch": "BM"},
                  files={"wk_file": ("bm_order.csv", order, "text/csv")})
     assert r.status_code == 200
@@ -1041,14 +1041,14 @@ def test_weekly_order_works_without_any_inventory_data(web, monkeypatch):
 
 def test_receiving_page_loads_and_requires_permission(web):
     _login(web, "controller")
-    r = web.get("/receiving/new")
+    r = web.get("/warehouse")
     assert r.status_code == 200
     assert "Warehouse" in r.text and "Receiving details" in r.text
-    assert 'action="/receiving/new/upload"' in r.text
-    assert 'action="/receiving/new"' in r.text
+    assert 'action="/warehouse/upload"' in r.text
+    assert 'action="/warehouse"' in r.text
 
     _login(web, "analyst")
-    r = web.get("/receiving/new", follow_redirects=False)
+    r = web.get("/warehouse", follow_redirects=False)
     assert r.status_code in (302, 303)
 
 
@@ -1064,7 +1064,7 @@ def test_receiving_upload_matches_derived_sku_to_existing_catalogue_product(web,
     try:
         _login(web, "controller")
         csv = "Description,QTY (set)\n1.   Model : 1.1KW-6 polo,10sets\n"
-        r = web.post("/receiving/new/upload",
+        r = web.post("/warehouse/upload",
                      files={"files": ("invoice.csv", io.BytesIO(csv.encode()), "text/csv")})
         assert r.status_code == 200
         assert f'value="{sku}"' in r.text
@@ -1076,14 +1076,14 @@ def test_receiving_upload_matches_derived_sku_to_existing_catalogue_product(web,
 
 def test_receiving_order_route_creates_updates_stock_and_reverses(web, db):
     """The full web flow: submit a receiving order, see it added to the
-    warehouse's stock and listed in Receiving records, then reverse it and
+    warehouse's stock and listed in Stock Records, then reverse it and
     see both the record and the stock disappear again."""
     from wms.models import Branch, Product, ReceivingOrder, StockOnHand
     dc = db.query(Branch).filter(Branch.code == "DC").first()
     sku = "ZZRECVWEB1"
     try:
         _login(web, "controller")
-        r = web.post("/receiving/new", data={
+        r = web.post("/warehouse", data={
             "branch_id": str(dc.id), "ro_no": "RO-WEB-TEST-1",
             "doc_date": "2026-01-10", "supplier": "Acme",
             "sku": sku, "description": "Web test widget", "received_qty": "12",
@@ -1094,11 +1094,11 @@ def test_receiving_order_route_creates_updates_stock_and_reverses(web, db):
               .filter(StockOnHand.branch_id == dc.id, StockOnHand.sku == sku).first())
         assert soh is not None and soh.qty_on_hand == 12
 
-        r = web.post("/receiving/RO-WEB-TEST-1/delete", follow_redirects=True)
+        r = web.post("/warehouse/RO-WEB-TEST-1/delete", follow_redirects=True)
         assert r.status_code == 200
         # the flash message itself still names it ("Reversed receiving order
         # RO-WEB-TEST-1: ...") - check it's gone from the records table instead
-        records = r.text.split("Receiving records")[1]
+        records = r.text.split("Stock Records")[1]
         assert "RO-WEB-TEST-1" not in records
         db.refresh(soh)
         assert soh.qty_on_hand == 0
@@ -1115,16 +1115,16 @@ def test_receiving_order_route_creates_updates_stock_and_reverses(web, db):
 
 def test_recon_page_loads_and_requires_permission(web):
     _login(web, "controller")
-    r = web.get("/recon/new")
+    r = web.get("/warehouse?tab=recon")
     assert r.status_code == 200
     assert "Recon" in r.text and "Dispatch details" in r.text
-    assert 'action="/recon/new/upload"' in r.text
-    assert 'action="/recon/new"' in r.text
+    assert 'action="/warehouse/recon/upload"' in r.text
+    assert 'action="/warehouse/recon"' in r.text
     # the destination can't be the warehouse itself
     assert '>DC —' not in r.text
 
     _login(web, "analyst")
-    r = web.get("/recon/new", follow_redirects=False)
+    r = web.get("/warehouse?tab=recon", follow_redirects=False)
     assert r.status_code in (302, 303)
 
 
@@ -1137,12 +1137,12 @@ def test_recon_route_moves_stock_and_reverses(web, db):
     sku = "ZZRECONWEB1"
     try:
         _login(web, "controller")
-        web.post("/receiving/new", data={
+        web.post("/warehouse", data={
             "branch_id": str(dc.id), "ro_no": "RO-RECONWEB-1",
             "doc_date": "2026-01-10", "sku": sku, "description": "Recon web test widget",
             "received_qty": "100",
         })
-        r = web.post("/recon/new", data={
+        r = web.post("/warehouse/recon", data={
             "branch_id": str(bm.id), "do_no": "DO-WEB-TEST-1",
             "doc_date": "2026-01-11", "sku": sku, "description": "Recon web test widget",
             "dispatched_qty": "40",
@@ -1156,7 +1156,7 @@ def test_recon_route_moves_stock_and_reverses(web, db):
                                               StockOnHand.sku == sku).first()
         assert dc_soh.qty_on_hand == 60 and bm_soh.qty_on_hand == 40
 
-        r = web.post("/recon/DO-WEB-TEST-1/delete", follow_redirects=True)
+        r = web.post("/warehouse/recon/DO-WEB-TEST-1/delete", follow_redirects=True)
         assert r.status_code == 200
         records = r.text.split("Recon records")[1]
         assert "DO-WEB-TEST-1" not in records
@@ -1187,11 +1187,11 @@ def test_receiving_order_feeds_the_split_tool(web, db):
     sku = str(st.groupby("sku")["weekly_demand"].sum().idxmax())  # a real fast mover
     try:
         _login(web, "controller")
-        web.post("/receiving/new", data={
+        web.post("/warehouse", data={
             "branch_id": str(dc.id), "ro_no": "RO-WEB-TEST-2",
             "doc_date": "2026-01-10", "sku": sku, "received_qty": "77",
         })
-        r = web.post("/analytics/split", data={"split_mode": "oneoff"})
+        r = web.post("/allocation/split", data={"split_mode": "oneoff"})
         assert r.status_code == 200
         body = r.text.split("Split result,")[1]
         assert sku.upper() in body.upper()

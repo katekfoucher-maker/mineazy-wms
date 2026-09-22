@@ -57,7 +57,7 @@
 
 <div class="card" id="stock-by-product">
   <div class="card-head"><h2>Stock by product</h2></div>
-  <form class="inline" method="get" action="/inventory">
+  <form class="inline" method="get" action="/branches">
     <div style="min-width:220px"><label>Branch</label>
       <select name="bcode" onchange="this.form.requestSubmit()">
         <option value="">All branches</option>
@@ -91,7 +91,7 @@
 
 <div class="card" id="low-stock-list">
   <div class="card-head"><h2>{{ m.ic('warn') }} Low stock, high-priority products</h2></div>
-  <form class="inline" method="get" action="/inventory">
+  <form class="inline" method="get" action="/branches">
     <div style="min-width:220px"><label>Branch</label>
       <select name="low_bcode" onchange="this.form.requestSubmit()">
         <option value="">All branches</option>
@@ -126,7 +126,7 @@
     on stock with no sales at all in the forecast history - capital tied up on a shelf, worth
     reviewing for a markdown, transfer or write-off.
   </p>
-  <form class="inline" method="get" action="/inventory">
+  <form class="inline" method="get" action="/branches">
     <div style="min-width:220px"><label>Branch</label>
       <select name="excess_bcode" onchange="this.form.requestSubmit()">
         <option value="">All branches</option>
@@ -162,7 +162,7 @@
 
   {% if can(user.role, 'backorder.enter') %}
   <div class="uploads" style="margin-bottom:18px">
-    <form class="upload" method="post" action="/analytics/upload" enctype="multipart/form-data">
+    <form class="upload" method="post" action="/allocation/upload" enctype="multipart/form-data">
       <input type="hidden" name="kind" value="inventory">
       <h4>Branch inventory <span class="sub">replaces the branch's stock-on-hand snapshot</span></h4>
       <select name="branch_code" required aria-label="Branch">

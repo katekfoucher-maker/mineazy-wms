@@ -105,9 +105,9 @@ def test_web_demand_tab_is_the_weekly_forecast(web):
         pytest.skip("no weekly_sales files present")
     _login(web)
     # bare /analytics now defaults to the Allocation plan, not this tab
-    assert "Split by predicted sales" in web.get("/analytics").text
+    assert "Split by predicted sales" in web.get("/allocation").text
 
-    r = web.get("/analytics?tab=demand")
+    r = web.get("/allocation?tab=demand")
     assert r.status_code == 200
     assert "Forecast by product" in r.text
     assert 'class="fit"' in r.text
@@ -121,9 +121,9 @@ def test_web_demand_tab_is_the_weekly_forecast(web):
     assert "Demand forecast" in r.text and "Allocation plan" in r.text
     # removed/unrecognised tabs still resolve (fall through to the
     # allocation-plan default), never 500
-    assert web.get("/analytics?tab=stats").status_code == 200
+    assert web.get("/allocation?tab=stats").status_code == 200
 
-    r2 = web.get("/analytics?tab=demand&q=cable")
+    r2 = web.get("/allocation?tab=demand&q=cable")
     assert r2.status_code == 200
     # data-layer filter: bcode restricts rows to the one branch (the exact
     # code, not a name prefix - "gwanda" alone now also matches Gwanda

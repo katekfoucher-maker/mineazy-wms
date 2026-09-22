@@ -166,7 +166,7 @@ def test_staff_nav_is_unrestricted(web):
 def test_standard_user_cannot_reach_restricted_pages_directly(web, db):
     _make_user(db, username="std2", role="user")
     _login(web, "std2")
-    for path in ("/backorders", "/products", "/recon/new", "/receiving/new"):
+    for path in ("/backorders", "/products", "/warehouse?tab=recon", "/warehouse"):
         r = web.get(path, follow_redirects=False)
         assert r.status_code == 303, path
 
@@ -174,17 +174,17 @@ def test_standard_user_cannot_reach_restricted_pages_directly(web, db):
 def test_standard_user_does_not_see_upload_cards(web, db):
     _make_user(db, username="std3", role="user")
     _login(web, "std3")
-    r = web.get("/analytics?tab=demand")
+    r = web.get("/allocation?tab=demand")
     assert "Upload data" not in r.text
-    r2 = web.get("/inventory")
+    r2 = web.get("/branches")
     assert "Update inventory" not in r2.text
 
 
 def test_staff_sees_upload_cards(web):
     _login(web, "controller")
-    r = web.get("/analytics?tab=demand")
+    r = web.get("/allocation?tab=demand")
     assert "Upload data" in r.text
-    r2 = web.get("/inventory")
+    r2 = web.get("/branches")
     assert "Update inventory" in r2.text
 
 

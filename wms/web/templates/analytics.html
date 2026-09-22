@@ -9,7 +9,7 @@
   <div class="card">
     <h3>Upload data</h3>
     <div class="uploads">
-      <form class="upload" method="post" action="/analytics/upload-weekly" enctype="multipart/form-data">
+      <form class="upload" method="post" action="/allocation/upload-weekly" enctype="multipart/form-data">
         <h4>Weekly sales <span class="sub">drives the per-SKU forecast</span></h4>
         <select name="branch_code" aria-label="Branch">
           <option value="">Which Branch</option>
@@ -22,7 +22,7 @@
         </label>
         <button type="submit">Load weekly files</button>
       </form>
-      <form class="upload" method="post" action="/analytics/upload-weekly-inventory" enctype="multipart/form-data">
+      <form class="upload" method="post" action="/allocation/upload-weekly-inventory" enctype="multipart/form-data">
         <h4>Weekly stock <span class="sub">spots stockout weeks for the forecast</span></h4>
         <select name="branch_code" aria-label="Branch">
           <option value="">Which Branch</option>
@@ -52,8 +52,8 @@ function upName(inp){
 </script>
 
 <div class="tabs">
-  <a href="/analytics?tab=allocation" class="{{ 'on' if tab=='allocation' }}">Allocation plan</a>
-  <a href="/analytics?tab=demand" class="{{ 'on' if tab!='allocation' }}">Demand forecast</a>
+  <a href="/allocation?tab=allocation" class="{{ 'on' if tab=='allocation' }}">Allocation plan</a>
+  <a href="/allocation?tab=demand" class="{{ 'on' if tab!='allocation' }}">Demand forecast</a>
 </div>
 
 {% if tab != 'allocation' %}
@@ -137,7 +137,7 @@ function upName(inp){
     </style>
 
     {% if can(user.role, 'backorder.enter') %}
-    <form id="split-form" method="post" action="/analytics/split"
+    <form id="split-form" method="post" action="/allocation/split"
           enctype="multipart/form-data">
 
       <div style="margin-bottom:12px">
@@ -476,7 +476,7 @@ document.addEventListener('click', function(e){
 (function(){
   var panel = document.getElementById('split-results');
   if (!panel || !window.fetch || !window.DOMParser) return;      // native submit
-  var forms = document.querySelectorAll('form[action="/analytics/split"]');
+  var forms = document.querySelectorAll('form[action="/allocation/split"]');
   forms.forEach(function(form){
     form.addEventListener('submit', function(e){
       e.preventDefault();

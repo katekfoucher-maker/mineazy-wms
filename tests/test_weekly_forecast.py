@@ -816,7 +816,7 @@ def test_upload_weekly_route(tmp_path, monkeypatch, seeded):
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
         ("files", ("notes.txt", b"nope", "text/plain")),
     ]
-    r = c.post("/analytics/upload-weekly", files=files, follow_redirects=False)
+    r = c.post("/allocation/upload-weekly", files=files, follow_redirects=False)
     assert r.status_code == 303
 
     saved = _real_weeks()
@@ -855,7 +855,7 @@ def test_upload_weekly_route_branch_override(tmp_path, monkeypatch, seeded):
                    _xlsx([("AAA", "WIDGET", 4)]), xtype)),
         ("files", ("no dates here.xlsx", _xlsx([("AAA", "WIDGET", 1)]), xtype)),
     ]
-    r = c.post("/analytics/upload-weekly", data={"branch_code": "gwa"},
+    r = c.post("/allocation/upload-weekly", data={"branch_code": "gwa"},
                files=files, follow_redirects=False)
     assert r.status_code == 303
 

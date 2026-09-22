@@ -1,13 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Warehouse — Mineazy{% endblock %}
 {% block heading %}Warehouse{% endblock %}
-{% block subheading %}Products arriving into the warehouse{% endblock %}
 {% block body %}
 
 <div class="tabs">
-  <a href="/receiving/new?tab=upload" class="{{ 'on' if tab not in ('inventory', 'recon') }}">Upload</a>
-  <a href="/receiving/new?tab=inventory" class="{{ 'on' if tab == 'inventory' }}">Inventory</a>
-  <a href="/receiving/new?tab=recon" class="{{ 'on' if tab == 'recon' }}">Recon</a>
+  <a href="/warehouse?tab=upload" class="{{ 'on' if tab not in ('inventory', 'recon') }}">Upload</a>
+  <a href="/warehouse?tab=inventory" class="{{ 'on' if tab == 'inventory' }}">Inventory</a>
+  <a href="/warehouse?tab=recon" class="{{ 'on' if tab == 'recon' }}">Recon</a>
 </div>
 
 {% if tab == 'inventory' %}
@@ -17,7 +16,7 @@
     {% if wh_q %}Showing {{ '{:,}'.format(warehouse_shown) }} of {{ '{:,}'.format(warehouse_total_lines) }} product line(s)
     {% else %}{{ '{:,}'.format(warehouse_total_lines) }} product line(s){% endif %},
     {{ '{:,}'.format(warehouse_total_units) }} unit(s) on hand at the Distribution Center.</p>
-  <form class="inline" method="get" action="/receiving/new" style="margin-bottom:12px">
+  <form class="inline" method="get" action="/warehouse" style="margin-bottom:12px">
     <input type="hidden" name="tab" value="inventory">
     <div style="min-width:260px"><label>Search</label>
       <input type="text" name="wh_q" value="{{ wh_q }}" placeholder="SKU or product name" autocomplete="off"></div>
@@ -41,7 +40,7 @@
 
 <div class="card" id="recon-upload">
   <div class="card-head"><h2>{{ m.ic('upload') }} Import from document</h2></div>
-  <form method="post" action="/recon/new/upload" enctype="multipart/form-data" class="inline">
+  <form method="post" action="/warehouse/recon/upload" enctype="multipart/form-data" class="inline">
     <div style="min-width:320px">
       <label>Photo/scan, PDF, CSV or Excel of the dispatch document</label>
       <input type="file" name="files" multiple
@@ -59,7 +58,7 @@
 
 <div class="card">
   <div class="card-head"><h2>Dispatch details</h2></div>
-  <form method="post" action="/recon/new" id="reconform">
+  <form method="post" action="/warehouse/recon" id="reconform">
     <div class="inline">
       <div><label>Reference</label>
         <input name="do_no" value="{{ prefill.do_no or '' }}"
@@ -132,7 +131,7 @@
         <td class="num">{{ d.lines }}</td>
         <td class="num">{{ '{:,}'.format(d.dispatched) }}</td>
         <td>
-          <form method="post" action="/recon/{{ d.do_no }}/delete"
+          <form method="post" action="/warehouse/recon/{{ d.do_no }}/delete"
                 onsubmit="return confirm('Reverse dispatch order {{ d.do_no }}?\n\nThis returns its dispatched units from the branch back to the warehouse and deletes the record.')">
             <button type="submit" class="danger" title="Reverse this dispatch order">✕</button>
           </form>
@@ -179,7 +178,7 @@ reconRecalc();
 
 <div class="card" id="upload">
   <div class="card-head"><h2>{{ m.ic('upload') }} Import from document</h2></div>
-  <form method="post" action="/receiving/new/upload" enctype="multipart/form-data" class="inline">
+  <form method="post" action="/warehouse/upload" enctype="multipart/form-data" class="inline">
     <div style="min-width:320px">
       <label>Photo/scan, PDF, CSV or Excel of the receiving document</label>
       <input type="file" name="files" multiple
@@ -197,7 +196,7 @@ reconRecalc();
 
 <div class="card">
   <div class="card-head"><h2>Receiving details</h2></div>
-  <form method="post" action="/receiving/new" id="roform">
+  <form method="post" action="/warehouse" id="roform">
     <div class="inline">
       <div><label>Location</label>
         <select name="branch_id" required>
@@ -250,7 +249,7 @@ reconRecalc();
 </div>
 
 <div class="card">
-  <div class="card-head"><h2>Receiving records</h2></div>
+  <div class="card-head"><h2>Stock Records</h2></div>
   <div class="scroll"><table class="fit">
     <thead><tr>
       <th>Reference</th><th>Location</th><th>Supplier</th><th>Date</th>
@@ -266,7 +265,7 @@ reconRecalc();
         <td class="num">{{ r.lines }}</td>
         <td class="num">{{ '{:,}'.format(r.received) }}</td>
         <td>
-          <form method="post" action="/receiving/{{ r.ro_no }}/delete"
+          <form method="post" action="/warehouse/{{ r.ro_no }}/delete"
                 onsubmit="return confirm('Reverse receiving order {{ r.ro_no }}?\n\nThis pulls its received units back out of stock and deletes the record.')">
             <button type="submit" class="danger" title="Reverse this receiving order">✕</button>
           </form>
