@@ -1,8 +1,42 @@
 {% extends "base.html" %}
-{% block title %}Receiving Orders — Mineazy{% endblock %}
-{% block heading %}Receiving Orders{% endblock %}
+{% block title %}Warehouse — Mineazy{% endblock %}
+{% block heading %}Warehouse{% endblock %}
 {% block subheading %}Products arriving into the warehouse{% endblock %}
 {% block body %}
+
+<div class="tabs">
+  <a href="/receiving/new?tab=upload" class="{{ 'on' if tab != 'inventory' }}">Upload</a>
+  <a href="/receiving/new?tab=inventory" class="{{ 'on' if tab == 'inventory' }}">Inventory</a>
+</div>
+
+{% if tab == 'inventory' %}
+<div class="card">
+  <div class="card-head"><h2>{{ m.ic('box') }} Warehouse inventory</h2></div>
+  <p class="mini muted" style="margin:-6px 0 14px">
+    {% if wh_q %}Showing {{ '{:,}'.format(warehouse_shown) }} of {{ '{:,}'.format(warehouse_total_lines) }} product line(s)
+    {% else %}{{ '{:,}'.format(warehouse_total_lines) }} product line(s){% endif %},
+    {{ '{:,}'.format(warehouse_total_units) }} unit(s) on hand at the Distribution Center.</p>
+  <form class="inline" method="get" action="/receiving/new" style="margin-bottom:12px">
+    <input type="hidden" name="tab" value="inventory">
+    <div style="min-width:260px"><label>Search</label>
+      <input type="text" name="wh_q" value="{{ wh_q }}" placeholder="SKU or product name" autocomplete="off"></div>
+    <div style="min-width:0"><button type="submit">Search</button></div>
+  </form>
+  {% if not warehouse_stock %}
+    <p class="mini muted">{{ 'Nothing matches that search.' if wh_q else 'No stock recorded yet.' }}</p>
+  {% else %}
+  <div class="scroll"><table class="fit">
+    <thead><tr><th>SKU</th><th>Product</th><th class="num">On hand</th></tr></thead>
+    <tbody>
+    {% for r in warehouse_stock %}
+      <tr><td>{{ r.sku }}</td><td>{{ r.product }}</td>
+        <td class="num">{{ '{:,}'.format(r.on_hand) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+</div>
+{% else %}
 
 <div class="card" id="upload">
   <div class="card-head"><h2>{{ m.ic('upload') }} Import from document</h2></div>
@@ -12,8 +46,7 @@
       <input type="file" name="files" multiple
              accept=".pdf,.csv,.tsv,.txt,.xlsx,.xlsm,.xls,.jpg,.jpeg,.png,.bmp,.tif,.tiff,.webp"
              required>
-      <p class="filedrop-hint">or drag and drop the file(s) here - select or drop
-        all the pages/photos of a multi-page document together</p>
+      <p class="filedrop-hint">or drag and drop the file(s) here</p>
     </div>
     <button type="submit">{{ m.ic('upload') }} Parse &amp; fill</button>
   </form>
@@ -27,9 +60,6 @@
   <div class="card-head"><h2>Receiving details</h2></div>
   <form method="post" action="/receiving/new" id="roform">
     <div class="inline">
-      <div><label>Invoice No.</label>
-        <input name="ro_no" value="{{ prefill.ro_no or '' }}"
-               placeholder="your invoice number (auto RO-000123 if blank)"></div>
       <div><label>Location</label>
         <select name="branch_id" required>
           <option value="">Select…</option>
@@ -40,9 +70,6 @@
         </select></div>
       <div><label>Date</label>
         <input type="date" name="doc_date" value="{{ prefill.doc_date or today }}"></div>
-      <div><label>Supplier</label>
-        <input name="supplier" placeholder="optional"
-               value="{{ prefill.supplier if prefill and prefill.supplier else '' }}"></div>
     </div>
     <div><label>Notes</label>
       <input name="notes" style="width:100%" value="{{ prefill.notes if prefill and prefill.notes else '' }}"></div>
@@ -77,10 +104,9 @@
 
     <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0 12px">
       <input type="checkbox" id="confirm" style="width:auto" required>
-      I have reviewed the quantities above — received units will be added to
-      the location's stock on hand.
+      I have reviewed the quantities above.
     </label>
-    <button type="submit">Confirm receipt</button>
+    <button type="submit">Confirm Stock</button>
   </form>
 </div>
 
@@ -134,7 +160,7 @@ function addRow(){
   recalc();
 }
 document.getElementById('roform').addEventListener('submit', function(e){
-  var ref = document.querySelector('[name=ro_no]').value.trim() || '(auto)';
+  var ref = '(auto)';
   var total = document.getElementById('recv-total').textContent;
   var lines = document.querySelectorAll('#lines tbody tr').length;
   if(!confirm('Confirm receiving order ' + ref + '?\n\n'
@@ -144,4 +170,5 @@ document.getElementById('roform').addEventListener('submit', function(e){
 });
 recalc();
 </script>
+{% endif %}
 {% endblock %}

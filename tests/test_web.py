@@ -52,7 +52,7 @@ def test_all_core_pages_render_with_erp_shell(web):
         # /backorders can still legitimately say "Active Back Orders" in its
         # own heading, so check the exact nav-link text, not the page at large)
         assert "Active Back Orders</a>" not in r.text, path
-        for label in ("Recon</a>", "Receiving Orders</a>", "Flow Analysis</a>",
+        for label in ("Recon</a>", "Warehouse</a>", "Flow Analysis</a>",
                       "Allocation</a>", "Reports &amp; Exports</a>"):
             assert label in r.text, (path, label)
 
@@ -1043,7 +1043,7 @@ def test_receiving_page_loads_and_requires_permission(web):
     _login(web, "controller")
     r = web.get("/receiving/new")
     assert r.status_code == 200
-    assert "Receiving Orders" in r.text and "Receiving details" in r.text
+    assert "Warehouse" in r.text and "Receiving details" in r.text
     assert 'action="/receiving/new/upload"' in r.text
     assert 'action="/receiving/new"' in r.text
 

@@ -148,9 +148,9 @@ def test_standard_user_nav_is_restricted(web, db):
     assert r.status_code == 200
     assert "Allocation</a>" in r.text
     assert "Flow Analysis</a>" in r.text
-    assert "Inventory</a>" in r.text
+    assert "Branches</a>" in r.text
     assert "Reports &amp; Exports</a>" in r.text
-    assert "Receiving Orders</a>" not in r.text
+    assert "Warehouse</a>" not in r.text
     assert "Recon</a>" not in r.text
     assert "Products</a>" not in r.text
     assert "Users</a>" not in r.text
@@ -159,7 +159,7 @@ def test_standard_user_nav_is_restricted(web, db):
 def test_staff_nav_is_unrestricted(web):
     _login(web, "controller")
     r = web.get("/analysis")
-    assert "Receiving Orders</a>" in r.text
+    assert "Warehouse</a>" in r.text
     assert "Recon</a>" in r.text
     assert "Products</a>" in r.text
 

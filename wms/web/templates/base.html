@@ -205,16 +205,16 @@
     <nav class="nav">
       {# Active Back Orders is temporarily removed from the nav - its
          routes/data are untouched, just not linked from here for now #}
-      {% if can(user.role, 'nav.full') %}
-      <a href="/receiving/new" class="{{ 'on' if P.startswith('/receiving') }}">
-        {{ m.ic('inbox') }} Receiving Orders</a>
-      {% endif %}
       <a href="/analytics" class="{{ 'on' if P.startswith('/analytics') }}">
         {{ m.ic('chart') }} Allocation</a>
       <a href="/analysis" class="{{ 'on' if P.startswith('/analysis') }}">
         {{ m.ic('flow') }} Flow Analysis</a>
+      {% if can(user.role, 'nav.full') %}
+      <a href="/receiving/new" class="{{ 'on' if P.startswith('/receiving') }}">
+        {{ m.ic('inbox') }} Warehouse</a>
+      {% endif %}
       <a href="/inventory" class="{{ 'on' if P.startswith('/inventory') }}">
-        {{ m.ic('box') }} Inventory</a>
+        {{ m.ic('box') }} Branches</a>
       {% if can(user.role, 'nav.full') %}
       <a href="/recon/new" class="{{ 'on' if P.startswith('/recon') }}">
         {{ m.ic('plus') }} Recon</a>

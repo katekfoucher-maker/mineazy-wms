@@ -622,18 +622,45 @@ def _recent_receiving(db, limit: int = 40) -> list[dict]:
     } for ro in rows]
 
 
-def _receiving_ctx(db, prefill=None):
+def _receiving_ctx(db, prefill=None, tab: str = "upload", wh_q: str = "") -> dict:
     dc = db.query(Branch).filter(Branch.code == "DC").first()
+    warehouse_stock, warehouse_total_lines, warehouse_total_units = [], 0, 0
+    if dc:
+        levels = stock_svc.levels_df(db)
+        if not levels.empty:
+            prod_name = {p.sku.upper(): p.name for p in db.query(Product).all()}
+            item_by_sku: dict = {}
+            st = weekly_fc.cached_run().get("state") if weekly_fc.has_data() else None
+            if st is not None and not st.empty:
+                for r in st.itertuples():
+                    item_by_sku.setdefault(str(r.sku).upper(), str(r.item or "").strip())
+            det = levels[(levels["branch_code"].str.upper() == "DC") & (levels["on_hand"] > 0)]
+            all_rows = []
+            for r in det.sort_values("on_hand", ascending=False).itertuples():
+                sku_u = str(r.sku).upper()
+                all_rows.append({
+                    "sku": r.sku, "on_hand": int(r.on_hand),
+                    "product": prod_name.get(sku_u) or item_by_sku.get(sku_u) or "",
+                })
+            warehouse_total_lines, warehouse_total_units = len(all_rows), sum(r["on_hand"] for r in all_rows)
+            wh_q = wh_q.strip().lower()
+            warehouse_stock = ([r for r in all_rows if wh_q in r["sku"].lower()
+                                or wh_q in r["product"].lower()] if wh_q else all_rows)
     return dict(branches=db.query(Branch).order_by(Branch.name).all(),
                 products=db.query(Product).order_by(Product.sku).limit(8000).all(),
                 receipts=_recent_receiving(db), today=date.today().isoformat(),
-                default_branch_id=dc.id if dc else None, prefill=prefill)
+                default_branch_id=dc.id if dc else None, prefill=prefill,
+                tab=tab, wh_q=wh_q, warehouse_stock=warehouse_stock,
+                warehouse_shown=len(warehouse_stock),
+                warehouse_total_lines=warehouse_total_lines,
+                warehouse_total_units=warehouse_total_units)
 
 
 @router.get("/receiving/new")
-def receiving_new(request: Request, db: Session = Depends(db_session),
+def receiving_new(request: Request, tab: str = "upload", wh_q: str = "",
+                  db: Session = Depends(db_session),
                   user: User = Depends(require_perm("receiving.enter"))):
-    return render(request, "receiving_new.html", user, **_receiving_ctx(db))
+    return render(request, "receiving_new.html", user, **_receiving_ctx(db, tab=tab, wh_q=wh_q))
 
 
 @router.post("/receiving/new/upload")
