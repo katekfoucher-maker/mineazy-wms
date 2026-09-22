@@ -438,9 +438,9 @@
 {% endmacro %}
 
 {% if growth.has_data %}
-<div class="card growth-bar-card">
+<div class="card growth-bar-card" id="sales-growth">
   <div class="card-head"><h3>Sales growth (month over month)</h3></div>
-  <form class="inline" method="get" style="margin:0 0 10px">
+  <form class="inline" method="get" action="/analysis#sales-growth" style="margin:0 0 10px">
     <div style="min-width:200px"><label>Branch</label>
       <select name="growth_bcode" onchange="this.form.requestSubmit()">
         <option value="">All branches</option>
