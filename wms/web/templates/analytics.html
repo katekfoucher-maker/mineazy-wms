@@ -169,21 +169,29 @@ function upName(inp){
       <script>
       function stockModeChanged(sel){
         var rb = document.getElementById('ro-picker-box'), ub = document.getElementById('src-upload-box');
+        var mb = document.getElementById('manual-entry-box');
         var roSel = document.getElementById('ro-select');
         var fileInp = ub ? ub.querySelector('input[type="file"]') : null;
         var upload = sel.value === 'upload';
+        var receiving = sel.value === 'receiving';
         // "Use Inventory" has no picker yet - the Warehouse Inventory spec
         // it'll actually read from isn't built yet, so this box stays
         // hidden for every mode until then, not just upload/custom-split.
         if (rb) rb.hidden = true;
         if (ub) ub.hidden = !upload;
+        if (mb) mb.hidden = receiving;
         // clear whichever field is now hidden, so a leftover selection from
         // before a mode switch never silently overrides the visible one
         if (roSel) roSel.value = '';
         if (!upload && fileInp) { fileInp.value = ''; upName(fileInp); }
+        if (receiving && mb) {
+          mb.querySelectorAll('input[name="man_sku"], input[name="man_qty"]')
+            .forEach(function(inp){ inp.value = ''; });
+        }
       }
       </script>
 
+      <div id="manual-entry-box">
       <p class="mini muted" style="margin:0 0 6px">or manually enter</p>
       <div class="scroll"><table id="split-lines" class="fit" style="max-width:560px">
         <thead><tr>
@@ -206,6 +214,7 @@ function upName(inp){
       </table></div>
       <p style="margin:6px 0 14px"><button type="button" class="ghost"
         onclick="splitAddRow()">{{ m.ic('plus') }} Add line</button></p>
+      </div>
 
       <div class="inline" style="margin:0 0 12px">
         <div style="min-width:200px"><label>Split as</label>
@@ -219,11 +228,11 @@ function upName(inp){
             <div class="ms-menu" hidden>
               <div class="ms-tools"><a href="#" data-brs="all">select all</a> &middot;
                 <a href="#" data-brs="none">clear</a></div>
-              {% for b in branches %}
+              {% for c, n in fc_branches %}
                 <label class="ms-opt">
-                  <input type="checkbox" name="split_branches" value="{{ b.code }}"
-                         {{ 'checked' if b.code in (split_branches or []) }}>
-                  {{ b.name }}
+                  <input type="checkbox" name="split_branches" value="{{ c }}"
+                         {{ 'checked' if c in (split_branches or []) }}>
+                  {{ n }}
                 </label>
               {% endfor %}
             </div>
