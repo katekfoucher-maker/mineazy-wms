@@ -625,7 +625,7 @@ def _recent_receiving(db, limit: int = 40) -> list[dict]:
 def _receiving_ctx(db, prefill=None, tab: str = "upload", wh_q: str = "") -> dict:
     dc = db.query(Branch).filter(Branch.code == "DC").first()
     warehouse_stock, warehouse_total_lines, warehouse_total_units = [], 0, 0
-    if dc:
+    if tab == "inventory" and dc:
         levels = stock_svc.levels_df(db)
         if not levels.empty:
             prod_name = {p.sku.upper(): p.name for p in db.query(Product).all()}
@@ -646,14 +646,17 @@ def _receiving_ctx(db, prefill=None, tab: str = "upload", wh_q: str = "") -> dic
             wh_q = wh_q.strip().lower()
             warehouse_stock = ([r for r in all_rows if wh_q in r["sku"].lower()
                                 or wh_q in r["product"].lower()] if wh_q else all_rows)
-    return dict(branches=db.query(Branch).order_by(Branch.name).all(),
+    branches = db.query(Branch).order_by(Branch.name).all()
+    return dict(branches=branches,
+                recon_branches=[b for b in branches if b.code != "DC"],
                 products=db.query(Product).order_by(Product.sku).limit(8000).all(),
                 receipts=_recent_receiving(db), today=date.today().isoformat(),
                 default_branch_id=dc.id if dc else None, prefill=prefill,
                 tab=tab, wh_q=wh_q, warehouse_stock=warehouse_stock,
                 warehouse_shown=len(warehouse_stock),
                 warehouse_total_lines=warehouse_total_lines,
-                warehouse_total_units=warehouse_total_units)
+                warehouse_total_units=warehouse_total_units,
+                dispatches=_recent_dispatches_recon(db) if tab == "recon" else [])
 
 
 @router.get("/receiving/new")
@@ -661,6 +664,13 @@ def receiving_new(request: Request, tab: str = "upload", wh_q: str = "",
                   db: Session = Depends(db_session),
                   user: User = Depends(require_perm("receiving.enter"))):
     return render(request, "receiving_new.html", user, **_receiving_ctx(db, tab=tab, wh_q=wh_q))
+
+
+@router.get("/recon/new")
+def recon_new_redirect():
+    """Recon now lives as a tab of the Warehouse page; keep the old URL
+    working for anyone with it bookmarked."""
+    return RedirectResponse("/receiving/new?tab=recon", 303)
 
 
 @router.post("/receiving/new/upload")
@@ -779,20 +789,6 @@ def _recent_dispatches_recon(db, limit: int = 40) -> list[dict]:
     } for do in rows]
 
 
-def _recon_ctx(db, prefill=None):
-    return dict(branches=[b for b in db.query(Branch).order_by(Branch.name).all()
-                          if b.code != "DC"],
-                products=db.query(Product).order_by(Product.sku).limit(8000).all(),
-                dispatches=_recent_dispatches_recon(db), today=date.today().isoformat(),
-                prefill=prefill)
-
-
-@router.get("/recon/new")
-def recon_new(request: Request, db: Session = Depends(db_session),
-             user: User = Depends(require_perm("receiving.enter"))):
-    return render(request, "recon_new.html", user, **_recon_ctx(db))
-
-
 @router.post("/recon/new/upload")
 def recon_upload(request: Request, files: list[UploadFile] = File(...),
                  db: Session = Depends(db_session),
@@ -804,7 +800,7 @@ def recon_upload(request: Request, files: list[UploadFile] = File(...),
             [(f.file.read(), f.filename or "") for f in files])
     except Exception as e:
         flash(request, f"Could not read the document: {e}", "error")
-        return render(request, "recon_new.html", user, **_recon_ctx(db))
+        return render(request, "receiving_new.html", user, **_receiving_ctx(db, tab="recon"))
 
     prods = {p.sku: p for p in db.query(Product).all()}
     branch_id = None
@@ -841,7 +837,7 @@ def recon_upload(request: Request, files: list[UploadFile] = File(...),
     }
     label = files[0].filename if len(files) == 1 else f"{len(files)} files"
     flash(request, f"Parsed {len(lines)} line(s) from {label}.", "success")
-    return render(request, "recon_new.html", user, **_recon_ctx(db, prefill))
+    return render(request, "receiving_new.html", user, **_receiving_ctx(db, prefill=prefill, tab="recon"))
 
 
 @router.post("/recon/new")
@@ -866,7 +862,7 @@ def recon_create(request: Request, branch_id: int = Form(...),
             flash(request, w, "info")
         flash(request, f"{do.do_no}: {do.total_dispatched} unit(s) dispatched to "
                        f"{do.branch.name}.", "success")
-        return RedirectResponse("/recon/new", 303)
+        return RedirectResponse("/receiving/new?tab=recon", 303)
     except Exception as e:
         db.rollback()
         flash(request, str(e), "error")
@@ -876,7 +872,7 @@ def recon_create(request: Request, branch_id: int = Form(...),
             "lines": [{"sku": s, "description": "", "dispatched_qty": q}
                       for s, q in zip(sku, dispatched_qty) if s.strip()],
         }
-        return render(request, "recon_new.html", user, **_recon_ctx(db, prefill))
+        return render(request, "receiving_new.html", user, **_receiving_ctx(db, prefill=prefill, tab="recon"))
 
 
 @router.post("/recon/{do_no}/delete")
@@ -891,7 +887,7 @@ def recon_delete(do_no: str, request: Request, db: Session = Depends(db_session)
     except Exception as e:
         db.rollback()
         flash(request, str(e), "error")
-    return RedirectResponse("/recon/new", 303)
+    return RedirectResponse("/receiving/new?tab=recon", 303)
 
 
 @router.get("/backorders/{bo_no}")

@@ -216,8 +216,6 @@
       <a href="/inventory" class="{{ 'on' if P.startswith('/inventory') }}">
         {{ m.ic('box') }} Branches</a>
       {% if can(user.role, 'nav.full') %}
-      <a href="/recon/new" class="{{ 'on' if P.startswith('/recon') }}">
-        {{ m.ic('plus') }} Recon</a>
       <a href="/products" class="{{ 'on' if P.startswith('/products') }}">
         {{ m.ic('tag') }} Products</a>
       {% endif %}

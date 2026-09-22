@@ -160,7 +160,6 @@ def test_staff_nav_is_unrestricted(web):
     _login(web, "controller")
     r = web.get("/analysis")
     assert "Warehouse</a>" in r.text
-    assert "Recon</a>" in r.text
     assert "Products</a>" in r.text
 
 
