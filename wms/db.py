@@ -81,6 +81,8 @@ _ADDED_COLUMNS = {
                     "period_start": "DATE"},
     "sales_records": {"source_ref": "VARCHAR(50)"},
     "weekly_sales_lines": {"is_simulated": "BOOLEAN NOT NULL DEFAULT 0"},
+    "users": {"email": "VARCHAR(255)", "google_sub": "VARCHAR(255)",
+              "is_approved": "BOOLEAN NOT NULL DEFAULT 1"},
 }
 
 # one-off value fixes after create_all (idempotent)

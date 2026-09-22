@@ -504,7 +504,7 @@
   </div>
 </div>
 
-{% if model_scores %}
+{% if model_scores and can(user.role, 'forecast.compare') %}
 <div class="card">
   <div class="card-head"><h3>Model comparison, last week held out</h3></div>
   <form class="inline" id="model-filter" method="post" action="/analysis/model"

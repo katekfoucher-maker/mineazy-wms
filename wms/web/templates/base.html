@@ -205,20 +205,28 @@
     <nav class="nav">
       {# Active Back Orders is temporarily removed from the nav - its
          routes/data are untouched, just not linked from here for now #}
+      {% if can(user.role, 'nav.full') %}
       <a href="/receiving/new" class="{{ 'on' if P.startswith('/receiving') }}">
         {{ m.ic('inbox') }} Receiving Orders</a>
+      {% endif %}
       <a href="/analytics" class="{{ 'on' if P.startswith('/analytics') }}">
         {{ m.ic('chart') }} Allocation</a>
       <a href="/analysis" class="{{ 'on' if P.startswith('/analysis') }}">
         {{ m.ic('flow') }} Flow Analysis</a>
       <a href="/inventory" class="{{ 'on' if P.startswith('/inventory') }}">
         {{ m.ic('box') }} Inventory</a>
+      {% if can(user.role, 'nav.full') %}
       <a href="/recon/new" class="{{ 'on' if P.startswith('/recon') }}">
         {{ m.ic('plus') }} Recon</a>
       <a href="/products" class="{{ 'on' if P.startswith('/products') }}">
         {{ m.ic('tag') }} Products</a>
+      {% endif %}
       <a href="/reports" class="{{ 'on' if P.startswith('/reports') }}">
         {{ m.ic('doc') }} Reports &amp; Exports</a>
+      {% if can(user.role, 'users.admin') %}
+      <a href="/users" class="{{ 'on' if P.startswith('/users') }}">
+        {{ m.ic('users') }} Users</a>
+      {% endif %}
     </nav>
   </aside>
 

@@ -29,6 +29,14 @@ class User(TimestampedBase):
     password_hash = Column(String(255), nullable=True)
     branch_id = Column(Integer, ForeignKey("branches.id", ondelete="SET NULL"), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
+    # Google-signup accounts (role "user"): email/google_sub identify the
+    # Google account, is_approved gates first login until an admin approves
+    # it (see /users). Internal accounts (admin/controller/clerk/branch/
+    # analyst, created via seed/console, always password-based) default
+    # approved so this never affects them.
+    email = Column(String(255), nullable=True)
+    google_sub = Column(String(255), nullable=True)
+    is_approved = Column(Boolean, nullable=False, default=True)
 
 
 class Branch(TimestampedBase):

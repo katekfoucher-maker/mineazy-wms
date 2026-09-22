@@ -18,6 +18,9 @@
         color:#fff;font:inherit;font-weight:600;cursor:pointer}
  button:hover{background:var(--brand)}
  .flash{margin-top:14px;padding:10px 12px;border-radius:9px;font-size:13px;background:#fee2e2;color:#b91c1c}
+ .flash.success{background:#e6f4ec;color:#0f7b3d}
+ .signup-link{display:block;margin-top:18px;font-size:12px;color:var(--muted);text-align:center;text-decoration:none}
+ .signup-link:hover{color:var(--ink)}
 </style></head><body>
 <form class="box" method="post" action="/login">
   <div class="logo">M</div>
@@ -28,6 +31,7 @@
   <label>Password</label>
   <input name="password" type="password" autocomplete="current-password">
   <button type="submit">Sign in</button>
-  {% for f in flashes %}<div class="flash">{{ f.m }}</div>{% endfor %}
+  {% for f in flashes %}<div class="flash {{ f.c }}">{{ f.m }}</div>{% endfor %}
+  <a class="signup-link" href="/signup">Don&rsquo;t have an account? Sign up</a>
 </form>
 </body></html>

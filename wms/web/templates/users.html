@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Users — Mineazy{% endblock %}
+{% block heading %}Users{% endblock %}
+{% block subheading %}Approve Google sign-ups and manage roles (admin only){% endblock %}
+{% block body %}
+
+<style>
+  .user-form{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .user-form select{min-width:160px}
+</style>
+
+{% if pending %}
+<div class="card">
+  <div class="card-head"><h2>{{ m.ic('inbox') }} Pending approval</h2></div>
+  <p class="mini muted" style="margin:-6px 0 14px">
+    {{ pending|length }} sign-up(s) waiting - each signed in with Google and is
+    unusable until approved here.</p>
+  <div class="tbl-wrap"><table class="fit">
+    <thead><tr><th>Name</th><th>Email</th><th>Signed up</th><th>Role to grant</th><th></th></tr></thead>
+    <tbody>
+    {% for u in pending %}
+      <tr>
+        <td>{{ u.full_name }}</td>
+        <td>{{ u.email or '' }}</td>
+        <td>{{ u.created_at.strftime('%Y-%m-%d %H:%M') if u.created_at else '' }}</td>
+        <td>
+          <form class="user-form" method="post" action="/users/{{ u.id }}/approve">
+            <select name="role">
+              {% for r in roles %}<option value="{{ r }}" {{ 'selected' if r == u.role }}>{{ role_label.get(r, r) }}</option>{% endfor %}
+            </select>
+            <button type="submit">Approve</button>
+          </form>
+        </td>
+        <td>
+          <form method="post" action="/users/{{ u.id }}/reject" onsubmit="return confirm('Reject and remove this sign-up?')">
+            <button type="submit" class="ghost">Reject</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head"><h2>{{ m.ic('tag') }} All users</h2></div>
+  <div class="tbl-wrap"><table class="fit">
+    <thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td>{{ u.full_name }}</td>
+        <td>{{ u.username }}</td>
+        <td>{{ u.email or '' }}</td>
+        <td>
+          {% if u.id == user.id %}
+            {{ role_label.get(u.role, u.role) }}
+          {% else %}
+            <form class="user-form" method="post" action="/users/{{ u.id }}/role">
+              <select name="role" onchange="this.form.requestSubmit()">
+                {% for r in roles %}<option value="{{ r }}" {{ 'selected' if r == u.role }}>{{ role_label.get(r, r) }}</option>{% endfor %}
+              </select>
+            </form>
+          {% endif %}
+        </td>
+        <td>
+          {% if not u.is_approved %}<span class="pill PENDING_APPROVAL">pending</span>
+          {% elif u.is_active %}<span class="pill CLOSED">active</span>
+          {% else %}<span class="pill NIL">disabled</span>{% endif %}
+        </td>
+        <td>
+          {% if u.id != user.id and u.is_approved %}
+            <form method="post" action="/users/{{ u.id }}/toggle-active"
+                  onsubmit="return confirm('{{ 'Disable' if u.is_active else 'Re-enable' }} {{ u.full_name }}?')">
+              <button type="submit" class="ghost">{{ 'Disable' if u.is_active else 'Enable' }}</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+{% endblock %}

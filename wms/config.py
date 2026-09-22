@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-change-me-to-a-long-random-string"
     session_max_age: int = 60 * 60 * 12   # 12h
 
+    # "Sign up with Google" (see /signup, wms/services/google_oauth.py). From
+    # a Google Cloud Console OAuth 2.0 "Web application" client - add every
+    # deployment's "<origin>/auth/google/callback" to that client's Authorized
+    # redirect URIs. Blank = the signup page shows a "not configured yet"
+    # message instead of a broken button. Google requires the redirect URI to
+    # be https:// for anything other than localhost, so an http-only
+    # deployment (e.g. a bare EC2 IP) can't use this until it has HTTPS.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+
     # Database. MySQL is the target backend; SQLite is the zero-setup fallback.
     #   MySQL:  mysql+pymysql://wms:wms_password@localhost:3306/mineazy_wms
     database_url: str = "sqlite:///./wms.db"

@@ -7,6 +7,7 @@ stock-on-hand inventory summary. No ledger, adjustments, counts or ASN pages
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 import sys
 from datetime import date, datetime
@@ -30,7 +31,7 @@ from wms.models import (
     BackOrder, Branch, DeliveryNote, DispatchOrder, Product, ReceivingOrder,
     StockOnHand, User,
 )
-from wms.security import ROLE_LABEL, verify_password
+from wms.security import ROLE_LABEL, ROLES, verify_password
 from wms.services import backorders as dn_svc
 from wms.services import backorder_entry as bo_entry
 from wms.services import backorder_stages as bo_stage
@@ -40,8 +41,10 @@ from wms.services import stock as stock_svc
 from wms.services import doc_import
 from wms.services import catalog
 from wms.services import catalogue
+from wms.services import google_oauth
 from wms.web.deps import (
-    Redirect, current_user, db_session, flash, render, require_login, require_perm,
+    Redirect, current_user, db_session, flash, pop_flashes, render, require_login,
+    require_perm,
 )
 
 router = APIRouter()
@@ -98,7 +101,8 @@ def login_form(request: Request, user=Depends(current_user)):
     if user:
         return RedirectResponse("/", 303)
     from wms.web.deps import templates
-    return templates.TemplateResponse("login.html", {"request": request, "flashes": []})
+    return templates.TemplateResponse("login.html", {
+        "request": request, "flashes": pop_flashes(request)})
 
 
 @router.post("/login")
@@ -120,6 +124,167 @@ def logout(request: Request):
     return RedirectResponse("/login", 303)
 
 
+# ---- self-service signup ("Standard User" role: Google-verified, then
+# needs a "users.admin" holder to approve it on /users before first login) --
+def _google_redirect_uri(request: Request) -> str:
+    return str(request.base_url).rstrip("/") + "/auth/google/callback"
+
+
+def _unique_username(db: Session, base: str) -> str:
+    base = re.sub(r"[^a-z0-9._-]", "", base.strip().lower())[:50] or "user"
+    candidate = base
+    i = 2
+    while db.query(User).filter(User.username == candidate).first():
+        candidate = f"{base}{i}"
+        i += 1
+    return candidate
+
+
+@router.get("/signup")
+def signup_form(request: Request, user=Depends(current_user)):
+    if user:
+        return RedirectResponse("/", 303)
+    from wms.web.deps import templates
+    return templates.TemplateResponse("signup.html", {
+        "request": request, "flashes": pop_flashes(request),
+        "google_configured": google_oauth.configured(),
+    })
+
+
+@router.get("/auth/google/start")
+def google_start(request: Request):
+    if not google_oauth.configured():
+        flash(request, "Google sign-in isn't set up yet. Contact the administrator.", "error")
+        return RedirectResponse("/signup", 303)
+    state = google_oauth.new_state()
+    request.session["oauth_state"] = state
+    return RedirectResponse(google_oauth.auth_url(_google_redirect_uri(request), state), 303)
+
+
+@router.get("/auth/google/callback")
+def google_callback(request: Request, code: str = "", state: str = "", error: str = "",
+                    db: Session = Depends(db_session)):
+    expected_state = request.session.pop("oauth_state", None)
+    if error:
+        flash(request, "Google sign-in was cancelled.", "error")
+        return RedirectResponse("/signup", 303)
+    if not code or not state or not expected_state or state != expected_state:
+        flash(request, "Google sign-in failed (the request expired or was tampered with). Try again.", "error")
+        return RedirectResponse("/signup", 303)
+
+    try:
+        claims = google_oauth.exchange_code(code, _google_redirect_uri(request))
+    except google_oauth.GoogleAuthError as e:
+        flash(request, str(e), "error")
+        return RedirectResponse("/signup", 303)
+
+    u = db.query(User).filter(User.google_sub == claims["sub"]).first()
+    if u is None:
+        u = User(username=_unique_username(db, claims["email"].split("@")[0]),
+                 full_name=claims["name"], email=claims["email"],
+                 google_sub=claims["sub"], role="user", password_hash=None,
+                 is_active=True, is_approved=False)
+        db.add(u)
+        db.commit()
+        flash(request, f"Thanks, {u.full_name}! Your sign-up has been sent to the "
+                       f"administrator for approval - you'll be able to sign in once "
+                       f"it's approved.", "success")
+        return RedirectResponse("/login", 303)
+
+    if not u.is_active:
+        flash(request, "Your account has been disabled. Contact the administrator.", "error")
+        return RedirectResponse("/login", 303)
+    if not u.is_approved:
+        flash(request, "Your account is still awaiting administrator approval.", "error")
+        return RedirectResponse("/login", 303)
+
+    request.session["uid"] = u.id
+    nxt = request.session.pop("_next", "/")
+    flash(request, f"Welcome, {u.full_name}.", "success")
+    return RedirectResponse(nxt, 303)
+
+
+# ---- Users (admin-only: approve Google sign-ups, manage roles) -------------
+@router.get("/users")
+def users_page(request: Request, db: Session = Depends(db_session),
+              user: User = Depends(require_perm("users.admin"))):
+    pending = (db.query(User).filter(User.is_approved.is_(False))
+              .order_by(User.created_at).all())
+    everyone = db.query(User).order_by(User.role, User.username).all()
+    return render(request, "users.html", user, pending=pending, users=everyone,
+                  roles=ROLES)
+
+
+@router.post("/users/{uid}/approve")
+def users_approve(request: Request, uid: int, role: str = Form(""),
+                  db: Session = Depends(db_session),
+                  user: User = Depends(require_perm("users.admin"))):
+    target = db.query(User).filter(User.id == uid).first()
+    if not target:
+        flash(request, "User not found.", "error")
+        return RedirectResponse("/users", 303)
+    if role.strip() in ROLES:
+        target.role = role.strip()
+    target.is_approved = True
+    db.commit()
+    flash(request, f"Approved {target.full_name} as {ROLE_LABEL.get(target.role, target.role)}.",
+         "success")
+    return RedirectResponse("/users", 303)
+
+
+@router.post("/users/{uid}/reject")
+def users_reject(request: Request, uid: int, db: Session = Depends(db_session),
+                 user: User = Depends(require_perm("users.admin"))):
+    target = db.query(User).filter(User.id == uid).first()
+    if not target:
+        flash(request, "User not found.", "error")
+    elif target.is_approved:
+        flash(request, "Only a pending sign-up can be rejected - disable an "
+                       "approved user instead.", "error")
+    else:
+        db.delete(target)
+        db.commit()
+        flash(request, f"Rejected and removed {target.full_name}.", "success")
+    return RedirectResponse("/users", 303)
+
+
+@router.post("/users/{uid}/role")
+def users_set_role(request: Request, uid: int, role: str = Form(...),
+                   db: Session = Depends(db_session),
+                   user: User = Depends(require_perm("users.admin"))):
+    if uid == user.id:
+        flash(request, "You can't change your own role here.", "error")
+        return RedirectResponse("/users", 303)
+    target = db.query(User).filter(User.id == uid).first()
+    if not target:
+        flash(request, "User not found.", "error")
+    elif role.strip() not in ROLES:
+        flash(request, "Not a valid role.", "error")
+    else:
+        target.role = role.strip()
+        db.commit()
+        flash(request, f"{target.full_name} is now {ROLE_LABEL.get(target.role, target.role)}.",
+             "success")
+    return RedirectResponse("/users", 303)
+
+
+@router.post("/users/{uid}/toggle-active")
+def users_toggle_active(request: Request, uid: int, db: Session = Depends(db_session),
+                        user: User = Depends(require_perm("users.admin"))):
+    if uid == user.id:
+        flash(request, "You can't disable your own account.", "error")
+        return RedirectResponse("/users", 303)
+    target = db.query(User).filter(User.id == uid).first()
+    if not target:
+        flash(request, "User not found.", "error")
+    else:
+        target.is_active = not target.is_active
+        db.commit()
+        flash(request, f"{target.full_name} is now "
+                       f"{'active' if target.is_active else 'disabled'}.", "success")
+    return RedirectResponse("/users", 303)
+
+
 @router.get("/")
 def home(user: User = Depends(require_login)):
     # Active Back Orders is temporarily off the nav - land on Flow Analysis instead
@@ -132,7 +297,7 @@ def home(user: User = Depends(require_login)):
 @router.get("/backorders")
 def backorders(request: Request, stage: str = "", branch_id: str = "",
                q: str = "", db: Session = Depends(db_session),
-               user: User = Depends(require_login)):
+               user: User = Depends(require_perm("nav.full"))):
     """Active Back Orders grid - list + Stage filter + Search."""
     branches = db.query(Branch).order_by(Branch.name).all()
     bid = _bid(branch_id)
@@ -704,7 +869,7 @@ def recon_delete(do_no: str, request: Request, db: Session = Depends(db_session)
 
 @router.get("/backorders/{bo_no}")
 def bo_detail(bo_no: str, request: Request, db: Session = Depends(db_session),
-              user: User = Depends(require_login)):
+              user: User = Depends(require_perm("nav.full"))):
     try:
         bo = bo_entry.get(db, bo_no)
     except Exception:
@@ -746,7 +911,7 @@ def bo_advance(bo_no: str, request: Request, to_stage: str = Form(...),
 # --- delivery note (the requested-vs-sent source document) detail ---
 @router.get("/delivery-notes/{dn_no}")
 def dn_detail(dn_no: str, request: Request, db: Session = Depends(db_session),
-              user: User = Depends(require_login)):
+              user: User = Depends(require_perm("nav.full"))):
     dn = db.query(DeliveryNote).filter(DeliveryNote.dn_no == dn_no).first()
     if not dn:
         raise Redirect("/backorders")
@@ -1637,7 +1802,7 @@ def inventory_page(request: Request, bcode: str = "", q: str = "", low_bcode: st
 # ======================================================================
 @router.get("/products")
 def products_page(request: Request, q: str = "", category: str = "",
-                  db: Session = Depends(db_session), user: User = Depends(require_login)):
+                  db: Session = Depends(db_session), user: User = Depends(require_perm("nav.full"))):
     """The product catalogue: browse/search, and (with products.manage) add
     a new product or edit an existing one by SKU.
 
