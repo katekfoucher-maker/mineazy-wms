@@ -95,6 +95,28 @@ def levels_df(db: Session) -> pd.DataFrame:
     return df
 
 
+# Branches whose reported stock-on-hand isn't reliable enough to use for
+# allocation math (flagged by the business, not derived from anything in the
+# data itself). Read-only views (the Inventory page, coverage() below) still
+# show the real figure via plain levels_df() - only allocation call sites use
+# levels_df_for_allocation().
+UNRELIABLE_FOR_ALLOCATION = {"BM"}         # Belmont Shop
+
+
+def levels_df_for_allocation(db: Session) -> pd.DataFrame:
+    """Like :func:`levels_df`, but zeroes the on-hand of branches in
+    ``UNRELIABLE_FOR_ALLOCATION``. Allocation treats a zeroed branch as if
+    nothing were on its shelf - the conservative reading ("send the full
+    target") rather than letting a number nobody trusts suppress what gets
+    sent there. The real stock_on_hand rows are untouched."""
+    df = levels_df(db)
+    if df.empty or not UNRELIABLE_FOR_ALLOCATION:
+        return df
+    df = df.copy()
+    df.loc[df["branch_code"].str.upper().isin(UNRELIABLE_FOR_ALLOCATION), "on_hand"] = 0
+    return df
+
+
 def coverage(db: Session) -> dict:
     df = levels_df(db)
     if df.empty:

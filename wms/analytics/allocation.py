@@ -86,7 +86,7 @@ def weekly_allocation_plan(db: Session, *, branch_code: str = "", q: str = ""
     cols = ["branch", "sku", "product", "weekly_demand", "target", "on_hand",
             "to_transport"]
 
-    inv = stock_svc.levels_df(db)                    # DB balance is authoritative
+    inv = stock_svc.levels_df_for_allocation(db)      # DB balance is authoritative
     if inv.empty:
         inv = inv_mod.load_inventory()               # fall back to an uploaded snapshot
     on_hand = (inv.set_index(["branch_code", "sku"])["on_hand"]
@@ -289,7 +289,7 @@ def allocate_by_forecast(db: Session, *, sku, qty: int,
             universe.append((c, c))
             uni_codes.add(c)
 
-    inv = stock_svc.levels_df(db)
+    inv = stock_svc.levels_df_for_allocation(db)
     on_hand: dict = {}
     if not inv.empty:
         sub = inv[inv["sku"].str.lower() == sku_code.lower()]

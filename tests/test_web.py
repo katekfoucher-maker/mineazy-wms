@@ -526,6 +526,7 @@ def test_inventory_upload_feeds_the_weekly_plan(web, db, tmp_path, monkeypatch):
     import io
     import pandas as pd
     from wms.analytics import allocation, demand_forecast, inventory as inv_mod
+    from wms.services import stock as stock_svc
 
     # isolate from the real data/inventory/ folder - this test previously wrote
     # a synthetic BM.xlsx over the real branch's live snapshot and then deleted
@@ -549,13 +550,21 @@ def test_inventory_upload_feeds_the_weekly_plan(web, db, tmp_path, monkeypatch):
         # assertions below are the real check.
         assert up.status_code == 200
 
+        # the general mechanism this test is about - the upload really did
+        # write into StockOnHand - checked via the PLAIN lookup, since
+        # Belmont's on-hand is deliberately excluded from allocation math
+        # specifically (see stock.UNRELIABLE_FOR_ALLOCATION / test_allocation.py)
+        real = stock_svc.levels_df(db)
+        real_row = real[(real.branch_code == "BM") & (real.sku == bm.sku.iloc[0])]
+        assert int(real_row["on_hand"].iloc[0]) == 1
+
         wk = allocation.weekly_allocation_plan(db, branch_code="belmont")
         assert not wk.empty
         row = wk[wk.sku == bm.sku.iloc[0]].iloc[0]
-        assert row["on_hand"] == 1
-        # target covers the week + 3 transit days; transport tops up to it
+        assert row["on_hand"] == 0            # excluded from allocation, not the real 1
+        # target covers the week + 3 transit days; nothing subtracted for Belmont
         assert row["target"] == -(-row["weekly_demand"] * 10 // 7)     # ceil
-        assert row["to_transport"] == max(0, row["target"] - 1)
+        assert row["to_transport"] == row["target"]
     finally:
         for f in inv_mod.inventory_dir().glob("BM.*"):
             f.unlink()

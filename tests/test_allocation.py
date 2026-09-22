@@ -5,6 +5,45 @@ import pytest
 from wms.analytics.allocation import _split_capped
 
 
+def test_levels_df_for_allocation_zeroes_belmont_but_not_plain_levels_df(seeded):
+    """Belmont's stock-on-hand isn't reliable enough to trust for allocation
+    (see UNRELIABLE_FOR_ALLOCATION) - the allocation-flavoured lookup must
+    zero it, while the plain lookup (Inventory page, coverage()) keeps
+    showing the real figure."""
+    from wms.db import get_session
+    from wms.models import Branch, StockOnHand
+    from wms.services import stock as stock_svc
+
+    db = next(get_session())
+    bm = db.query(Branch).filter(Branch.code == "BM").first()
+    other = db.query(Branch).filter(Branch.code != "BM").first()
+    for b in (bm, other):
+        db.query(StockOnHand).filter(StockOnHand.branch_id == b.id,
+                                     StockOnHand.sku == "TEST-ALLOC-SKU").delete()
+    db.add(StockOnHand(branch_id=bm.id, sku="TEST-ALLOC-SKU", qty_on_hand=42))
+    db.add(StockOnHand(branch_id=other.id, sku="TEST-ALLOC-SKU", qty_on_hand=17))
+    db.commit()
+
+    real = stock_svc.levels_df(db)
+    alloc = stock_svc.levels_df_for_allocation(db)
+
+    real_row = real[(real.branch_code == "BM") & (real.sku == "TEST-ALLOC-SKU")]
+    alloc_row = alloc[(alloc.branch_code == "BM") & (alloc.sku == "TEST-ALLOC-SKU")]
+    assert int(real_row["on_hand"].iloc[0]) == 42
+    assert int(alloc_row["on_hand"].iloc[0]) == 0
+
+    # an unrelated branch's figure is untouched in both
+    real_other = real[(real.branch_code == other.code) & (real.sku == "TEST-ALLOC-SKU")]
+    alloc_other = alloc[(alloc.branch_code == other.code) & (alloc.sku == "TEST-ALLOC-SKU")]
+    assert int(real_other["on_hand"].iloc[0]) == 17
+    assert int(alloc_other["on_hand"].iloc[0]) == 17
+
+    for b in (bm, other):
+        db.query(StockOnHand).filter(StockOnHand.branch_id == b.id,
+                                     StockOnHand.sku == "TEST-ALLOC-SKU").delete()
+    db.commit()
+
+
 def test_split_capped_is_proportional_when_under_caps():
     # caps are far above what's available -> pure proportional split by weight
     got = _split_capped(100, {"A": 9.0, "B": 1.0}, {"A": 1000, "B": 1000})

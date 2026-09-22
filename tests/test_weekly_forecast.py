@@ -495,6 +495,68 @@ def test_load_inventory_panel_negatives_to_zero(tmp_path):
     assert np.isnan(OH[0, 1]) and np.isnan(OH[0, 3])     # weeks with no reading
 
 
+def test_load_inventory_panel_aligns_to_a_monthly_panel(tmp_path):
+    """pan["weeks"] is month-end dates under the production default
+    (weekly_data_source="monthly") - real weekly Hansa stock files must still
+    land in the right MONTH bucket instead of being dropped/misaligned by
+    the old (date - weeks[0]).days / 7 math, and several weekly readings in
+    the same month take their lowest value (the most sensitive "stocked out
+    at some point this month" signal)."""
+    keys = [("BM", "AAA")]
+    weeks = ["2026-04-30", "2026-05-31", "2026-06-30"]        # 3 monthly periods
+
+    _stock_file(tmp_path / "BM 15-04-2026 Stock List.xlsx", [("AAA", 20)])
+    _stock_file(tmp_path / "BM 04-05-2026 Stock List.xlsx", [("AAA", 50)])
+    _stock_file(tmp_path / "BM 11-05-2026 Stock List.xlsx", [("AAA", 30)])
+    _stock_file(tmp_path / "BM 25-05-2026 Stock List.xlsx", [("AAA", 0)])
+    OH = wf.load_inventory_panel(keys, weeks, directory=str(tmp_path))
+
+    assert OH is not None and OH.shape == (1, 3)
+    assert OH[0, 0] == 20                     # April reading -> April bucket
+    assert OH[0, 1] == 0                      # 3 May readings -> May bucket, lowest kept
+    assert np.isnan(OH[0, 2])                 # no June reading
+
+
+def test_load_inventory_panel_from_db_aligns_to_a_monthly_panel(seeded):
+    from wms.db import get_session
+    from wms.models import WeeklyStockSnapshotLine
+
+    db = next(get_session())
+    db.query(WeeklyStockSnapshotLine).filter(
+        WeeklyStockSnapshotLine.branch_code == "ZZZTEST").delete()
+    db.add_all([
+        WeeklyStockSnapshotLine(branch_code="ZZZTEST", sku="Q1",
+                                week_start=pd.Timestamp("2026-05-04").date(),
+                                qty_on_hand=50),
+        WeeklyStockSnapshotLine(branch_code="ZZZTEST", sku="Q1",
+                                week_start=pd.Timestamp("2026-05-25").date(),
+                                qty_on_hand=0),
+    ])
+    db.commit()
+
+    keys = [("ZZZTEST", "Q1")]
+    weeks = ["2026-04-30", "2026-05-31", "2026-06-30"]
+    OH = wf._load_inventory_panel_from_db(keys, weeks)
+    assert OH is not None
+    assert OH[0, 1] == 0                      # both May readings -> May bucket, lowest kept
+
+    db.query(WeeklyStockSnapshotLine).filter(
+        WeeklyStockSnapshotLine.branch_code == "ZZZTEST").delete()
+    db.commit()
+
+
+def test_scaled_max_run_converts_weeks_to_months():
+    weekly_weeks = [(pd.Timestamp("2026-01-01") + pd.Timedelta(days=7 * w)).date().isoformat()
+                    for w in range(10)]
+    assert wf._scaled_max_run(weekly_weeks) == wf._MAX_STOCKOUT_RUN     # unchanged for weekly
+
+    monthly_weeks = [pd.Timestamp("2026-01-31") + pd.DateOffset(months=m)
+                     for m in range(10)]
+    monthly_weeks = [d.date().isoformat() for d in monthly_weeks]
+    scaled = wf._scaled_max_run(monthly_weeks)
+    assert 1 <= scaled < wf._MAX_STOCKOUT_RUN        # 8 weeks (~2 months), not 8 months
+
+
 def test_stockout_mask_conservative():
     # AAA: material seller (~20/wk) with an INTERIOR dry gap weeks 4-6
     # BBB: naturally intermittent low seller — must NOT be touched

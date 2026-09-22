@@ -27,6 +27,7 @@ import os
 import re
 import zlib
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -356,7 +357,46 @@ _HEUR_FREQ = 0.5         # SKU must sell at least this share of IN-STOCK weeks t
 _HEUR_LOW = 0.25         # (no reading) a week under this x the in-stock level = "near zero"
 _MIN_LIFT_LEVEL = 2.0    # only unconstrain SKUs selling at least this per in-stock week
 _MAX_STOCKOUT_RUN = 8    # a dry spell longer than this is a discontinued line, not a stockout
+                         # (in WEEKS - see _scaled_max_run for the monthly-panel equivalent)
 _MAX_CENSOR_FRAC = 0.5   # if more than half a SKU's weeks look censored, trust none of it
+
+
+def _period_index_finder(weeks):
+    """-> a function mapping a date to its index in ``weeks`` (the panel's own
+    sorted period markers), or ``None`` if the date isn't close enough to any
+    period to belong to it. Buckets by NEAREST marker with a tolerance derived
+    from the panel's own actual spacing (half the median gap between periods),
+    rather than assuming a fixed 7-day week - the old ``(date - weeks[0]).days
+    / 7`` math silently dropped or mis-bucketed every reading once the panel
+    was monthly (~28-31 day spacing) instead of weekly, which is what
+    load_inventory_panel/`_load_inventory_panel_from_db` actually get by
+    default now (weekly_data_source="monthly" - see load_panel)."""
+    days = np.array([pd.Timestamp(w).toordinal() for w in weeks], dtype=np.int64)
+    gaps = np.diff(days)
+    tol = max(1.0, float(np.median(gaps)) / 2) if len(gaps) else 3.5
+
+    def _find(date) -> Optional[int]:
+        d = pd.Timestamp(date).toordinal()
+        idx = int(np.searchsorted(days, d))
+        cands = [j for j in (idx - 1, idx) if 0 <= j < len(days)]
+        if not cands:
+            return None
+        best = min(cands, key=lambda j: abs(days[j] - d))
+        return best if abs(days[best] - d) <= tol else None
+    return _find
+
+
+def _scaled_max_run(weeks) -> int:
+    """``_MAX_STOCKOUT_RUN`` (defined in weeks) converted to however many of
+    THIS panel's periods cover about the same real time - so an 8-week cutoff
+    becomes ~2 periods on a monthly panel instead of 8 months."""
+    if len(weeks) < 2:
+        return _MAX_STOCKOUT_RUN
+    days = [pd.Timestamp(w).toordinal() for w in weeks]
+    gap = (days[-1] - days[0]) / (len(days) - 1)
+    if gap <= 0:
+        return _MAX_STOCKOUT_RUN
+    return max(1, round(_MAX_STOCKOUT_RUN * 7 / gap))
 
 
 def weekly_inventory_dir() -> Path:
@@ -437,19 +477,24 @@ def _load_inventory_panel_from_db(keys, weeks):
         db.close()
     if not rows:
         return None
-    anchor = pd.Timestamp(weeks[0])
     W = len(weeks)
+    find_period = _period_index_finder(weeks)
     k_ix = {k: i for i, k in enumerate(keys)}
     OH = np.full((len(keys), W), np.nan, np.float32)
     seen = False
     for r in rows:
-        wi = int(round((pd.Timestamp(r.week_start) - anchor).days / 7))
-        if wi < 0 or wi >= W:
+        wi = find_period(r.week_start)
+        if wi is None:
             continue
         i = k_ix.get((r.branch_code, r.sku))
         if i is None:
             continue
-        OH[i, wi] = max(0.0, float(r.qty_on_hand or 0))
+        val = max(0.0, float(r.qty_on_hand or 0))
+        # several weekly readings can land in the same period on a monthly
+        # panel - keep the LOWEST (the most sensitive "was there a stockout
+        # at any point this period" signal), not just whichever loaded last
+        prev = OH[i, wi]
+        OH[i, wi] = val if np.isnan(prev) else min(prev, val)
         seen = True
     return OH if seen else None
 
@@ -458,6 +503,10 @@ def load_inventory_panel(keys, weeks, directory=None):
     """``(S, W)`` on-hand aligned to the sales panel's ``keys``/``weeks``, from
     the weekly Hansa stock exports. ``nan`` where a (branch, SKU, week) has no
     reading; NEGATIVE figures are read as 0 (Hansa opening-balance artefacts).
+    ``weeks`` need not actually be weekly - a monthly ``pan["weeks"]``
+    (the production default, see load_panel) works too: readings are bucketed
+    to the nearest period by :func:`_period_index_finder`, and several weekly
+    readings landing in the same month take their lowest on-hand value.
 
     Reads uploaded Excel files under ``directory`` (or the configured
     ``weekly_inventory_dir``) when there are any there - the on-disk path this
@@ -472,7 +521,7 @@ def load_inventory_panel(keys, weeks, directory=None):
     if not files:
         return _load_inventory_panel_from_db(keys, weeks)
     from wms.analytics import inventory as _inv
-    anchor = pd.Timestamp(weeks[0])
+    find_period = _period_index_finder(weeks)
     W = len(weeks)
     k_ix = {k: i for i, k in enumerate(keys)}
     OH = np.full((len(keys), W), np.nan, np.float32)
@@ -481,8 +530,8 @@ def load_inventory_panel(keys, weeks, directory=None):
         code, ws = parse_name(f)
         if not code or ws is None:
             continue
-        wi = int(round((pd.Timestamp(ws) - anchor).days / 7))
-        if wi < 0 or wi >= W:
+        wi = find_period(ws)
+        if wi is None:
             continue
         try:
             raw = pd.read_excel(f, header=0, dtype=str)
@@ -498,7 +547,9 @@ def load_inventory_panel(keys, weeks, directory=None):
             i = k_ix.get((code, sku))
             if i is None or pd.isna(q):
                 continue
-            OH[i, wi] = max(0.0, float(q))           # negatives -> 0
+            val = max(0.0, float(q))                 # negatives -> 0
+            prev = OH[i, wi]
+            OH[i, wi] = val if np.isnan(prev) else min(prev, val)
             seen = True
     return OH if seen else None
 
@@ -554,12 +605,18 @@ def _trim_runs(row, maxrun):
     return row
 
 
-def _stockout_mask(MAT, OH, influence, heuristic=True):
+def _stockout_mask(MAT, OH, influence, heuristic=True, max_run=_MAX_STOCKOUT_RUN):
     """``(S, W)`` bool + ``(S,)`` in-stock level. A week is flagged only when the
     SKU sells materially when stocked (``_instock_level`` > 0), the week is
     INTERIOR (between that SKU's first and last sale), its sales are well below
     the level, and either an on-hand reading says 0 or - with no reading and the
-    heuristic on - it is near-zero with a sale close by on each side."""
+    heuristic on - it is near-zero with a sale close by on each side.
+
+    ``max_run`` (periods) caps how long a flagged run can be before it's
+    trimmed as a discontinued line rather than a stockout - defaults to
+    ``_MAX_STOCKOUT_RUN`` weeks, but a monthly ``MAT`` should pass
+    :func:`_scaled_max_run` so the cap still means "about the same real
+    time", not "8 months"."""
     S, W = MAT.shape
     lvl = _instock_level(MAT, OH, influence)
     oos = _oos_grid(MAT, OH)
@@ -580,7 +637,7 @@ def _stockout_mask(MAT, OH, influence, heuristic=True):
                     and (MAT[i, max(0, w - 2):w] > 0).any() \
                     and (MAT[i, w + 1:w + 3] > 0).any():
                 mask[i, w] = True
-        mask[i] = _trim_runs(mask[i], _MAX_STOCKOUT_RUN)
+        mask[i] = _trim_runs(mask[i], max_run)
         if mask[i].sum() > _MAX_CENSOR_FRAC * W:     # too much missing: trust none of it
             mask[i] = False
     return mask, lvl
@@ -609,7 +666,8 @@ def training_matrix(pan):
     infl = float(getattr(cfg, "weekly_spike_influence", _SPIKE_INFLUENCE))
     OH = load_inventory_panel(pan["keys"], pan["weeks"])
     mask, lvl = _stockout_mask(MAT, OH, infl,
-                               bool(getattr(cfg, "weekly_unconstrain_heuristic", True)))
+                               bool(getattr(cfg, "weekly_unconstrain_heuristic", True)),
+                               max_run=_scaled_max_run(pan["weeks"]))
     oos = _oos_grid(MAT, OH)                 # every week an on-hand reading said 0
     return _unconstrain(MAT, mask, lvl), mask, {
         "censored": int(mask.sum()), "cells": int(mask.size),
@@ -2646,7 +2704,7 @@ def low_stock_alerts(db, bcode: str = "", limit: int = 50) -> dict:
     threshold = sellers.quantile(_HIGH_PRIORITY_PCT)
     priority = {str(s).upper() for s in sellers[sellers >= threshold].index}
 
-    inv = stock_svc.levels_df(db)
+    inv = stock_svc.levels_df_for_allocation(db)      # matches the Allocation plan
     on_hand: dict = {}
     if not inv.empty:
         for r in inv.itertuples():
@@ -2710,7 +2768,7 @@ def reorder_points(db, bcode: str = "", limit: int = 300) -> dict:
 
     lead_time_weeks = max(get_settings().lead_time_days, 1) / 7.0
 
-    inv = stock_svc.levels_df(db)
+    inv = stock_svc.levels_df_for_allocation(db)
     on_hand: dict = {}
     if not inv.empty:
         for r in inv.itertuples():
