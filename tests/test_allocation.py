@@ -147,18 +147,18 @@ def test_allocation_reports_every_considered_branch_even_at_zero_alloc(seeded):
     match = next((a for a in res["allocations"] if a["branch"] == branch_name), None)
     assert match is not None, f"{branch_name} should still be reported for {sku}"
     assert match["allocated"] == 0
-    assert match["kind"] in ("held", "none")
+    assert match["kind"] == "held"
 
 
-def test_allocation_seeds_an_unstocked_branch_with_a_real_amount_for_a_fast_mover(seeded):
-    """A branch with no sales history for a product, and none on hand, should
-    still get a real amount to test demand there when the product sells
-    briskly at other branches - a token 1-unit probe makes no sense for a
-    fast mover with stock left over after covering its existing branches.
-    The seed is sized off the network's own lowest-selling (but actively
-    selling) branch: roughly half to three quarters of what that branch got,
-    per ``_SEED_FRACTION_OF_LOWEST``. Only a genuinely barely-moving product
-    (see the very-slow-mover test below) gets the old token 1-2 unit probe."""
+def test_allocation_probes_an_unstocked_branch_sized_by_branch_and_product(seeded):
+    """A branch with no sales history for a product, and none on hand, still
+    gets a real test quantity - not a flat token unit and not "no demand",
+    since an untested branch is simply unproven, not proven-uninterested.
+    The probe is sized off how well the product already performs at the
+    branches that DO carry it (yield per unit of branch size) times the
+    untested branch's OWN size (its total weekly demand across every
+    product) - a branch that generally sells a lot gets a bigger probe than
+    a branch that generally sells little, for the exact same product."""
     from wms.analytics import weekly_forecast as wfc
     from wms.analytics import allocation
     from wms.db import get_session
@@ -173,6 +173,8 @@ def test_allocation_seeds_an_unstocked_branch_with_a_real_amount_for_a_fast_move
     all_codes = set(name_by_code)
     if len(all_codes) < 2:
         pytest.skip("not enough branches in the sample data")
+    branch_size = {bc.upper(): tot for bc, tot in
+                  st.groupby(st["branch"].str.upper())["weekly_demand"].sum().items()}
 
     def _on_hand(code, sku):
         if inv.empty:
@@ -183,10 +185,10 @@ def test_allocation_seeds_an_unstocked_branch_with_a_real_amount_for_a_fast_move
 
     target_sku = target_code = None
     for sku, grp in st.groupby("sku"):
-        if grp["weekly_demand"].sum() <= allocation._VERY_SLOW_NET_WEEKLY:
+        if grp["weekly_demand"].sum() <= 0:
             continue                                    # only real movers here
         sellers = set(grp.loc[grp["weekly_demand"] > 0, "branch"].str.upper())
-        for code in sorted(all_codes - sellers):
+        for code in sorted(all_codes - sellers, key=lambda c: -branch_size.get(c, 0.0)):
             if _on_hand(code, sku) == 0:
                 target_sku, target_code = sku, code
                 break
@@ -196,65 +198,31 @@ def test_allocation_seeds_an_unstocked_branch_with_a_real_amount_for_a_fast_move
         pytest.skip("no real-moving SKU with an un-stocked branch gap in the sample data")
 
     res = allocation.allocate_by_forecast(db, sku=target_sku, qty=100, branch_codes=None)
-    assert res["very_slow"] is False
     match = next((a for a in res["allocations"] if a["branch"] == name_by_code[target_code]), None)
     assert match is not None
-    assert match["kind"] == "seed"
-    covered = [a["allocated"] for a in res["allocations"]
-              if a["kind"] == "cover" and a["allocated"] > 0]
-    assert covered
-    low = min(covered)
-    expected = max(1, round(low * allocation._SEED_FRACTION_OF_LOWEST))
-    assert match["allocated"] == expected
-    # meaningfully more than the old token 1-unit probe, unless the lowest
-    # covered branch itself only got 1-2 units
+    assert match["kind"] == "probe"
     assert match["allocated"] >= 1
 
 
-def test_allocation_probes_only_a_very_slow_mover(seeded):
-    """A genuinely barely-moving product (well below the ordinary "slow
-    mover" bar) still gets only a token 1-2 unit probe at an un-stocked
-    branch - not the bigger seed a real mover gets."""
+def test_allocation_probe_is_not_labelled_no_demand(seeded):
+    """A branch that's never sold a product is unproven, not proven to have
+    no demand for it - there is no 'none'/'no demand' kind any more."""
     from wms.analytics import weekly_forecast as wfc
     from wms.analytics import allocation
     from wms.db import get_session
-    from wms.services import stock as stock_svc
 
     if not wfc.has_data():
         pytest.skip("no weekly_sales files present")
     db = next(get_session())
     st = wfc.cached_run()["state"]
-    inv = stock_svc.levels_df(db)
-    name_by_code = dict(st[["branch", "branch_name"]].drop_duplicates().values)
-    all_codes = set(name_by_code)
-    if len(all_codes) < 2:
-        pytest.skip("not enough branches in the sample data")
-
-    def _on_hand(code, sku):
-        if inv.empty:
-            return 0
-        sub = inv[(inv["branch_code"].str.upper() == code) &
-                  (inv["sku"].str.lower() == str(sku).lower())]
-        return int(sub["on_hand"].sum()) if not sub.empty else 0
-
-    target_sku = target_code = None
-    for sku, grp in st.groupby("sku"):
-        net = grp["weekly_demand"].sum()
-        if net <= 0 or net > allocation._VERY_SLOW_NET_WEEKLY:
-            continue                                    # only very slow movers here
-        sellers = set(grp.loc[grp["weekly_demand"] > 0, "branch"].str.upper())
-        for code in sorted(all_codes - sellers):
-            if _on_hand(code, sku) == 0:
-                target_sku, target_code = sku, code
-                break
-        if target_sku:
+    sku = None
+    for s, grp in st.groupby("sku"):
+        if grp["weekly_demand"].sum() > 0:
+            sku = s
             break
-    if target_sku is None:
-        pytest.skip("no very-slow-moving SKU with an un-stocked branch gap in the sample data")
-
-    res = allocation.allocate_by_forecast(db, sku=target_sku, qty=100, branch_codes=None)
-    assert res["very_slow"] is True
-    match = next((a for a in res["allocations"] if a["branch"] == name_by_code[target_code]), None)
-    assert match is not None
-    assert match["kind"] == "probe"
-    assert 1 <= match["allocated"] <= allocation._PROBE_UNITS
+    if sku is None:
+        pytest.skip("no selling SKU in the sample data")
+    res = allocation.allocate_by_forecast(db, sku=sku, qty=1, branch_codes=None)
+    kinds = {a["kind"] for a in res["allocations"]}
+    assert "none" not in kinds and "seed" not in kinds
+    assert kinds <= {"probe", "cover", "held", "untested"}

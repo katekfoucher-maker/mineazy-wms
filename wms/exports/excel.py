@@ -204,8 +204,7 @@ def split_allocation_batch_workbook(db, *, pairs, branch_codes=None,
         prod = str(res.get("product") or sku)
         name = f"{prod} - {desc}" if desc and desc != prod else prod
         wh = int(res.get("warehouse", 0) or 0)
-        _basis = {"probe": "probe", "seed": "seed", "held": "no stock left",
-                  "none": "no demand"}
+        _basis = {"probe": "probe", "held": "no stock left", "untested": "untested"}
         for a in res.get("allocations", []):
             detail_rows.append({
                 "Product": name, "SKU": sku, "Qty to split": qty,
@@ -256,8 +255,7 @@ def split_batch_workbook(batch: dict, *, out_dir: Optional[Path] = None) -> Path
         sku = str(r.get("sku") or "")
         qty = int(r.get("qty") or 0)
         wh = int(r.get("warehouse") or 0)
-        _basis = {"probe": "probe", "seed": "seed", "held": "no stock left",
-                  "none": "no demand"}
+        _basis = {"probe": "probe", "held": "no stock left", "untested": "untested"}
         for a in r.get("allocations", []):
             d = {"Product": name, "SKU": sku, "Qty to split": qty,
                  "Branch": a.get("branch"),

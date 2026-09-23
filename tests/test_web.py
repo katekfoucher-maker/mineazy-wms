@@ -471,7 +471,8 @@ def test_auto_weekly_order_respects_recency_and_cover(db):
             bc = code_by_name[a["branch"]]
             rate, recent = rate_by[(bc, row["sku"].upper())]
             assert rate > 0 and recent > 0            # actively & recently selling there
-            target = int(np.ceil(rate * 10 / 7))
+            # a recent spike outranks a model forecast that hasn't caught up yet
+            target = int(np.ceil(max(rate, recent) * 10 / 7))
             oh = on_hand.get((bc, row["sku"].upper()), 0)
             assert oh < target                        # not already covered
             assert a["allocated"] == target - oh

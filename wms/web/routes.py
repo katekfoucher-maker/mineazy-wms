@@ -1301,11 +1301,14 @@ def _run_auto_weekly_order(db, brs: list[str], warehouse_pairs=None) -> dict:
         bc = str(r.branch).upper()
         if want_bc and bc not in want_bc:
             continue
-        rate = float(r.weekly_demand or 0)
+        recent = float(getattr(r, "recent_sales", 0) or 0)
+        if recent <= 0:
+            continue                                   # not sold there in the last ~4 weeks
+        # a recent spike can outpace the model before it catches up - never
+        # target below what's actually been selling lately
+        rate = max(float(r.weekly_demand or 0), recent)
         if rate <= 0:
             continue                                   # never actually forecast to sell here
-        if float(getattr(r, "recent_sales", 0) or 0) <= 0:
-            continue                                   # not sold there in the last ~4 weeks
         sku_u = str(r.sku).upper()
         target = int(np.ceil(rate * cover_days / 7))
         oh = on_hand.get((bc, sku_u), 0)

@@ -255,7 +255,7 @@ def split_allocation_batch_pdf(db, *, pairs, branch_codes=None,
         fill = False
         for a in res.get("allocations", []):
             pdf.set_fill_color(244, 246, 250)
-            tag = {"probe": "  (probe)", "seed": "  (new branch)"}.get(a.get("kind"), "")
+            tag = {"probe": "  (probe)"}.get(a.get("kind"), "")
             lbl = a["branch"] + tag
             pdf.cell(cols[0][1], 6, _lat1(lbl)[:56], border="LR", fill=fill)
             pdf.cell(cols[1][1], 6, f"{int(a['allocated']):,}", border="LR",
@@ -340,7 +340,7 @@ def split_batch_pdf(batch: dict, *, out_dir: Optional[Path] = None) -> Path:
         fill = False
         for a in r.get("allocations", []):
             pdf.set_fill_color(244, 246, 250)
-            tag = {"probe": "  (probe)", "seed": "  (new branch)"}.get(a.get("kind"), "")
+            tag = {"probe": "  (probe)"}.get(a.get("kind"), "")
             lbl = str(a.get("branch", "")) + tag
             pdf.cell(cols[0][1], 6, _lat1(lbl)[:44], border="LR", fill=fill)
             if weekly:

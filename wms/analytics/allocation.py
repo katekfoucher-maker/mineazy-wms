@@ -94,12 +94,19 @@ def weekly_allocation_plan(db: Session, *, branch_code: str = "", q: str = ""
 
     if wfc.has_data():
         st = wfc.cached_run()["state"]
+        # a recent sales spike can outpace the model before it catches up
+        # (e.g. a branch was out of stock for a while and demand is only now
+        # showing up in the raw numbers) - never target BELOW what's actually
+        # been selling these last few weeks, even if the model's own forecast
+        # hasn't caught up to it yet
+        weekly_demand = np.maximum(st["weekly_demand"].astype(int),
+                                   st["recent_sales"].astype(int))
         r = pd.DataFrame({
             "branch": st["branch_name"],
             "branch_code": st["branch"],
             "sku": st["sku"],
             "product": st["item"],
-            "weekly_demand": st["weekly_demand"].astype(int),
+            "weekly_demand": weekly_demand,
         })
     else:
         fc = dfc.cached_run()["forecast"]
@@ -141,14 +148,12 @@ _SLOW_COVER_WEEKS = 2      # slow mover: 2 weeks, so a ~1/wk item still ships 2 
 _SLOW_NET_WEEKLY  = 3.0    # whole-network forecast at/below this (units/wk) = slow mover
 _SLOW_WEEKS_SOLD  = 4      # ... or the busiest branch has sold in <= this many weeks
 
-# a much stricter bar than "slow" above - only a genuinely barely-moving
-# product gets tested with a token 1-2 units at a branch with no history.
-# Anything above this bar (including ordinary "slow" movers, and certainly
-# fast movers) gets a real seed instead - see _fill()/the probe step below.
+# a much stricter bar than "slow" above - informational only (how barely a
+# product moves network-wide), no longer changes how a probe is sized - see
+# the probe step below, which sizes off branch size + product performance
+# elsewhere instead of this threshold.
 _VERY_SLOW_NET_WEEKLY = 1.0
 _VERY_SLOW_WEEKS_SOLD = 2
-_PROBE_UNITS          = 1  # units seeded to a very-slow-mover branch, to test it
-_SEED_FRACTION_OF_LOWEST = 0.625  # midpoint of "half to three quarters"
 
 
 def _split_capped(total: int, weights: dict, caps: dict) -> dict:
@@ -304,6 +309,15 @@ def allocate_by_forecast(db: Session, *, sku, qty: int,
         bool(wsold) and max(wsold.values()) <= _VERY_SLOW_WEEKS_SOLD)
     cover = _SLOW_COVER_WEEKS if slow else _COVER_WEEKS
 
+    # each branch's own overall size (its total weekly demand across every
+    # product it sells) - the probe step below uses this so an untested
+    # branch's test quantity reflects how much it sells in general, not just
+    # a flat token amount regardless of whether it's Belmont or a corner shop
+    branch_size: dict = {}
+    if not st.empty:
+        for bc, tot in st.groupby(st["branch"].str.upper())["weekly_demand"].sum().items():
+            branch_size[bc] = float(tot)
+
     alloc = {c: 0 for c, _n in branches}
     remaining = qty
 
@@ -332,34 +346,41 @@ def allocate_by_forecast(db: Session, *, sku, qty: int,
     _fill(cover)
 
     probes: dict = {}
-    seeds: dict = {}
     if remaining > 0:
         untested = [c for c, _n in branches
                    if rate.get(c, 0.0) <= 0 and on_hand.get(c, 0) == 0
                    and alloc[c] == 0]
-        if very_slow:
-            # barely moves anywhere - a new branch only gets a token test unit
-            for c in untested:
+        if untested:
+            # an untested branch (never sold this product, none on hand) still
+            # deserves a real test quantity, not a token unit - sized off how
+            # well this product already performs at the branches that DO
+            # carry it (yield per unit of branch size), scaled by the
+            # untested branch's OWN size (its total weekly demand across
+            # every product it sells). A flagship branch like Belmont gets a
+            # meaningfully bigger probe than a small branch for a product
+            # neither has ever stocked, because its general sales exposure
+            # says it's more likely to move this one too. When nothing sells
+            # the product anywhere yet, fall back to splitting what's left by
+            # branch size alone.
+            covered = [c for c, a in alloc.items() if a > 0]
+            per_size = [alloc[c] / branch_size[c] for c in covered
+                       if branch_size.get(c, 0.0) > 0]
+            yield_per_size = (sum(per_size) / len(per_size)) if per_size else 0.0
+            untested_size_total = sum(branch_size.get(c, 0.0) for c in untested)
+            for c in sorted(untested, key=lambda c: -branch_size.get(c, 0.0)):
                 if remaining <= 0:
                     break
-                give = min(_PROBE_UNITS, remaining)
+                size = branch_size.get(c, 0.0)
+                if yield_per_size > 0:
+                    give = int(round(yield_per_size * size))
+                elif untested_size_total > 0:
+                    give = int(round(remaining * size / untested_size_total))
+                else:
+                    give = 1
+                give = max(1, min(give, remaining))
                 alloc[c] += give
                 probes[c] = give
                 remaining -= give
-        elif untested:
-            # a real mover: a new branch is worth a real seed, sized off what
-            # the lowest-selling branch that's actually covered already got -
-            # not a token unit that tells the network nothing
-            covered = [a for a in alloc.values() if a > 0]
-            if covered:
-                seed_qty = max(1, int(round(min(covered) * _SEED_FRACTION_OF_LOWEST)))
-                for c in untested:
-                    give = min(seed_qty, remaining)
-                    if give <= 0:
-                        break
-                    alloc[c] += give
-                    seeds[c] = give
-                    remaining -= give
 
     # everything left over stays at the warehouse - a split does not bulk-restock
     warehouse = max(0, remaining)
@@ -374,11 +395,11 @@ def allocate_by_forecast(db: Session, *, sku, qty: int,
         rt = rate.get(c, 0.0)
         oh = on_hand.get(c, 0)
         if a > 0:
-            kind = "probe" if c in probes else ("seed" if c in seeds else "cover")
+            kind = "probe" if c in probes else "cover"
         elif rt > 0:
-            kind = "held"           # has demand, but on-hand stock already covers it
+            kind = "held"           # ran out of quantity to allocate here
         else:
-            kind = "none"           # no predicted demand for this product here
+            kind = "untested"       # never probed - not the same as "no demand"
         allocs.append({
             "branch": n, "predicted": int(round(rt)), "allocated": int(a),
             "kind": kind,

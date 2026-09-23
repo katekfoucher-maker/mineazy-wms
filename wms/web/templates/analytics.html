@@ -337,9 +337,7 @@ function upName(inp){
               {% for a in it.allocations %}
                 <tr><td>{{ a.branch }}
                     {% if a.kind == 'probe' %} <span class="mini">probe</span>
-                    {% elif a.kind == 'seed' %} <span class="mini">new branch</span>
                     {% elif a.kind == 'held' %} <span class="mini muted">no stock left to allocate</span>
-                    {% elif a.kind == 'none' %} <span class="mini muted">no demand here</span>
                     {% endif %}</td>
                   <td class="num{% if a.allocated %} fc-hi{% endif %}">{{ '{:,}'.format(a.allocated) }}</td></tr>
               {% endfor %}

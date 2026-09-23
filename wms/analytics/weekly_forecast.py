@@ -2704,7 +2704,7 @@ def low_stock_alerts(db, bcode: str = "", limit: int = 50) -> dict:
     threshold = sellers.quantile(_HIGH_PRIORITY_PCT)
     priority = {str(s).upper() for s in sellers[sellers >= threshold].index}
 
-    inv = stock_svc.levels_df_for_allocation(db)      # matches the Allocation plan
+    inv = stock_svc.levels_df(db)      # real on-hand - a diagnostic view, not an allocation decision
     on_hand: dict = {}
     if not inv.empty:
         for r in inv.itertuples():
@@ -2768,7 +2768,7 @@ def reorder_points(db, bcode: str = "", limit: int = 300) -> dict:
 
     lead_time_weeks = max(get_settings().lead_time_days, 1) / 7.0
 
-    inv = stock_svc.levels_df_for_allocation(db)
+    inv = stock_svc.levels_df(db)      # real on-hand - a diagnostic view, not an allocation decision
     on_hand: dict = {}
     if not inv.empty:
         for r in inv.itertuples():
