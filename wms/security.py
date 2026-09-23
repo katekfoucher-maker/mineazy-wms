@@ -54,6 +54,10 @@ _PERMS: dict[str, set[str]] = {
     # get this now. Products/Users nav and the Model comparison card stay
     # gated separately below (products.view/users.admin/forecast.compare).
     "nav.full":         set(_STAFF_ROLES) | {"member", "user"},
+    # Split by predicted sales (Allocation plan tab): everyone with nav.full
+    # can use it - it's a core Allocation feature, not the data-upload cards
+    # gated by backorder.enter above ("user" stays out of those).
+    "allocation.split": set(_STAFF_ROLES) | {"member", "user"},
     # Products (nav + page): every staff role keeps it; "member" doesn't.
     "products.view":    set(_STAFF_ROLES),
     "forecast.compare": set(_STAFF_ROLES),

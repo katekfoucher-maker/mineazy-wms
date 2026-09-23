@@ -136,7 +136,7 @@ function upName(inp){
       .ms-opt.off:hover{background:transparent}
     </style>
 
-    {% if can(user.role, 'backorder.enter') %}
+    {% if can(user.role, 'allocation.split') %}
     <form id="split-form" method="post" action="/allocation/split"
           enctype="multipart/form-data">
 

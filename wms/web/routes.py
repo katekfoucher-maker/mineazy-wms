@@ -1499,7 +1499,7 @@ def analytics_split(request: Request,
                     wk_branch: list[str] = Form(default=[]),
                     wk_file: list[UploadFile] = File(default=[]),
                     db: Session = Depends(db_session),
-                    user: User = Depends(require_perm("backorder.enter"))):
+                    user: User = Depends(require_perm("allocation.split"))):
     """Unified split tool. The stock to distribute comes from the manual product
     lines, else one specific picked Receiving Order, else an uploaded stock
     file (a quick one-off override), else the warehouse's real stock on hand

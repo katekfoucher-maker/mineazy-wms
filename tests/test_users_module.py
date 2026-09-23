@@ -293,6 +293,23 @@ def test_staff_sees_upload_cards(web):
     assert "Update inventory" in r2.text
 
 
+def test_standard_user_can_use_split_by_predicted_sales(web, db):
+    """The split-by-sales form on the Allocation plan tab is a core
+    Allocation feature (unlike the data-upload cards above) - a Standard
+    User must still see and be able to submit it."""
+    _make_user(db, username="std5", role="user")
+    _login(web, "std5")
+    r = web.get("/allocation?tab=allocation")
+    assert "Choose allocation" in r.text
+    assert 'action="/allocation/split"' in r.text
+
+    r2 = web.post("/allocation/split",
+                  data={"split_mode": "oneoff", "man_sku": ["HGG001"], "man_qty": ["5"]},
+                  follow_redirects=False)
+    assert r2.status_code == 200
+    assert "manual entry" in r2.text
+
+
 def test_model_comparison_hidden_for_standard_user_only(web, db):
     _make_user(db, username="std4", role="user")
     _login(web, "std4")
