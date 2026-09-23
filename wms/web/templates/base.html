@@ -215,7 +215,7 @@
       {% endif %}
       <a href="/branches" class="{{ 'on' if P.startswith('/branches') }}">
         {{ m.ic('box') }} Branches</a>
-      {% if can(user.role, 'nav.full') %}
+      {% if can(user.role, 'products.view') %}
       <a href="/products" class="{{ 'on' if P.startswith('/products') }}">
         {{ m.ic('tag') }} Products</a>
       {% endif %}

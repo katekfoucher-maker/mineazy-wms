@@ -219,12 +219,15 @@ def test_standard_user_nav_is_restricted(web, db):
     assert r.status_code == 200
     assert "Allocation</a>" in r.text
     assert "Flow Analysis</a>" in r.text
+    assert "Warehouse</a>" in r.text
     assert "Branches</a>" in r.text
     assert "Reports &amp; Exports</a>" in r.text
-    assert "Warehouse</a>" not in r.text
-    assert "Recon</a>" not in r.text
     assert "Products</a>" not in r.text
     assert "Users</a>" not in r.text
+
+    # can actually open Warehouse, not just see the nav link
+    r2 = web.get("/warehouse")
+    assert r2.status_code == 200
 
 
 def test_staff_nav_is_unrestricted(web):
@@ -234,12 +237,43 @@ def test_staff_nav_is_unrestricted(web):
     assert "Products</a>" in r.text
 
 
+def test_member_role_sees_everything_except_products_and_users(web, db):
+    """The "member" role (general staff-ish accounts, e.g. admin-created
+    users) sees/uses Warehouse, Branches, Allocation, Flow Analysis and
+    Reports like any staff role, but not Products or Users - and never the
+    Model comparison card."""
+    _make_user(db, username="teamuser", role="member")
+    _login(web, "teamuser")
+    r = web.get("/analysis")
+    assert r.status_code == 200
+    assert "Allocation</a>" in r.text
+    assert "Flow Analysis</a>" in r.text
+    assert "Warehouse</a>" in r.text
+    assert "Branches</a>" in r.text
+    assert "Reports &amp; Exports</a>" in r.text
+    assert "Products</a>" not in r.text
+    assert "Users</a>" not in r.text
+    assert "Model comparison, last week held out" not in r.text
+
+    # can actually reach Warehouse (not just see the nav link)
+    r2 = web.get("/warehouse")
+    assert r2.status_code == 200
+    # Products and Users stay blocked even by direct URL
+    for path in ("/products", "/users"):
+        r3 = web.get(path, follow_redirects=False)
+        assert r3.status_code == 303, path
+
+
 def test_standard_user_cannot_reach_restricted_pages_directly(web, db):
     _make_user(db, username="std2", role="user")
     _login(web, "std2")
-    for path in ("/backorders", "/products", "/warehouse?tab=recon", "/warehouse"):
+    for path in ("/products", "/users"):
         r = web.get(path, follow_redirects=False)
         assert r.status_code == 303, path
+    # Warehouse (including its Recon tab) is now allowed
+    for path in ("/warehouse", "/warehouse?tab=recon"):
+        r2 = web.get(path, follow_redirects=False)
+        assert r2.status_code == 200, path
 
 
 def test_standard_user_does_not_see_upload_cards(web, db):

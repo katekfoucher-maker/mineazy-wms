@@ -1926,7 +1926,7 @@ def inventory_page_redirect(request: Request):
 # ======================================================================
 @router.get("/products")
 def products_page(request: Request, q: str = "", category: str = "",
-                  db: Session = Depends(db_session), user: User = Depends(require_perm("nav.full"))):
+                  db: Session = Depends(db_session), user: User = Depends(require_perm("products.view"))):
     """The product catalogue: browse/search, and (with products.manage) add
     a new product or edit an existing one by SKU.
 

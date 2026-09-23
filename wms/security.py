@@ -20,10 +20,15 @@ def verify_password(plain: str, hashed: str | None) -> bool:
 # ---- roles + permissions ---------------------------------------------------
 # "user" is the self-service tier: signs up with a Gmail account (see
 # /signup), starts unapproved (User.is_approved=False) until a "users.admin"
-# holder approves it on /users. It deliberately sits outside every internal
-# staff permission below (backorder.*/products.manage/receiving.enter) so
-# those stay hidden with no extra template work - see nav.full/forecast.view.
-ROLES = ["admin", "controller", "clerk", "branch", "analyst", "user"]
+# holder approves it on /users. It gets Warehouse (nav.full/receiving.enter,
+# below) but stays outside products.manage/products.view/users.admin/
+# forecast.compare - see products.view/forecast.compare below.
+#
+# "member" is an admin-created general-access tier: sees/uses everything a
+# staff role does (Warehouse, Recon, Allocation, Branches, back orders) EXCEPT
+# the Products and Users nav items and the Model comparison card on Flow
+# Analysis - see products.view/users.admin/forecast.compare below.
+ROLES = ["admin", "controller", "clerk", "branch", "analyst", "member", "user"]
 
 ROLE_LABEL = {
     "admin": "System Administrator",
@@ -31,6 +36,7 @@ ROLE_LABEL = {
     "clerk": "Branch / Order Clerk",
     "branch": "Branch User",
     "analyst": "Reporting Analyst",
+    "member": "Team Member",
     "user": "Standard User",
 }
 
@@ -38,16 +44,18 @@ _STAFF_ROLES = {"admin", "controller", "clerk", "branch", "analyst"}
 
 # permission -> which roles hold it
 _PERMS: dict[str, set[str]] = {
-    "view":             {"admin", "controller", "clerk", "branch", "analyst", "user"},
-    "backorder.enter":  {"admin", "controller", "clerk"},   # create back order / delivery note
+    "view":             {"admin", "controller", "clerk", "branch", "analyst", "member", "user"},
+    "backorder.enter":  {"admin", "controller", "clerk", "member"},   # create back order / delivery note
     "backorder.manage": {"admin", "controller"},            # advance stages / cancel
     "products.manage":  {"admin", "controller", "clerk"},   # add / edit a product catalogue entry
-    "receiving.enter":  {"admin", "controller", "clerk"},   # enter/reverse a receiving or Recon dispatch order
+    "receiving.enter":  {"admin", "controller", "clerk", "member", "user"},  # enter/reverse a receiving or Recon dispatch order
     "users.admin":      {"admin"},
-    # nav items / page sections a plain "user" doesn't get: Receiving
-    # Orders, Recon, Products (nav) and the Model comparison card (Flow
-    # Analysis) - every staff role keeps seeing all of these as before.
-    "nav.full":         set(_STAFF_ROLES),
+    # Warehouse/Recon nav + page: every staff role, "member" and "user" all
+    # get this now. Products/Users nav and the Model comparison card stay
+    # gated separately below (products.view/users.admin/forecast.compare).
+    "nav.full":         set(_STAFF_ROLES) | {"member", "user"},
+    # Products (nav + page): every staff role keeps it; "member" doesn't.
+    "products.view":    set(_STAFF_ROLES),
     "forecast.compare": set(_STAFF_ROLES),
 }
 
