@@ -222,7 +222,8 @@ function upName(inp){
             <option value="oneoff" {{ 'selected' if split_mode != 'weekly' }}>One off</option>
             <option value="weekly" {{ 'selected' if split_mode == 'weekly' }}>Weekly order</option>
           </select></div>
-        <div style="min-width:220px"><label id="split-branches-label">Branches to split to</label>
+        <div style="min-width:220px" id="split-branches-box"{{ ' hidden' if split_mode == 'weekly' }}>
+          <label id="split-branches-label">Branches to split to</label>
           <div class="ms-dd">
             <button type="button" class="ms-toggle" aria-expanded="false">All branches</button>
             <div class="ms-menu" hidden>
@@ -266,24 +267,20 @@ function upName(inp){
     {% endif %}
 
     {% macro branch_order_card(b) %}
-      {% set has_onhand = b.lines|selectattr('on_hand', 'defined')|list|length > 0 %}
-      {% set ncols = 4 + (1 if has_onhand else 0) + (1 if b.req_total else 0) %}
+      {% set ncols = 3 + (1 if b.req_total else 0) %}
       <div style="margin:0 0 18px">
         <h4 style="margin:0 0 4px">{{ b.branch }}
           <span class="mini">{{ b.lines|length }} product(s)
             &middot; {{ '{:,}'.format(b.rec_total) }} unit(s){% if b.req_total %}
             &middot; {{ '{:,}'.format(b.req_total) }} requested{% endif %}</span></h4>
         <div class="tbl-wrap" style="max-width:640px"><table class="fit">
-          <thead><tr><th>SKU</th><th>Product</th><th class="num">Weekly sales</th>
-            {% if has_onhand %}<th class="num">On hand</th>{% endif %}
+          <thead><tr><th>SKU</th><th>Product</th>
             {% if b.req_total %}<th class="num">Requested</th>{% endif %}
             <th class="num">Rec. Qty</th></tr></thead>
           <tbody>
           {% for l in b.lines %}
             <tr><td>{{ l.sku }}</td>
               <td><b>{{ l.description }}</b></td>
-              <td class="num">{{ '{:,}'.format(l.predicted) if l.predicted is defined else '—' }}</td>
-              {% if has_onhand %}<td class="num">{{ '{:,}'.format(l.on_hand) if l.on_hand is defined else '—' }}</td>{% endif %}
               {% if b.req_total %}<td class="num">{{ '{:,}'.format(l.requested) }}</td>{% endif %}
               <td class="num fc-hi">{{ '{:,}'.format(l.rec) }}</td></tr>
           {% endfor %}
@@ -442,6 +439,19 @@ function wkAddRow(){
     var wk = sel.value === 'weekly';
     var w = document.getElementById('split-weekly');
     if (w) w.hidden = !wk;
+    // "Branches to split to" only applies to a predicted-sales split - a
+    // weekly order's branches come from which files were uploaded instead,
+    // so the box is irrelevant (and confusing) once weekly order is picked
+    var bb = document.getElementById('split-branches-box');
+    if (bb) {
+      bb.hidden = wk;
+      if (wk) {
+        bb.querySelectorAll('input[name="split_branches"]:checked')
+          .forEach(function(cb){ cb.checked = false; });
+        var tog = bb.querySelector('.ms-toggle');
+        if (tog) tog.textContent = 'All branches';
+      }
+    }
     var btn = document.getElementById('split-submit');
     if (btn) btn.textContent = wk ? 'Create Weekly Order' : 'Split';
   }

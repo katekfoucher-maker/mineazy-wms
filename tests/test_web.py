@@ -375,7 +375,7 @@ def test_weekly_order_generates_without_branch_files(web, db):
     # every result line actually has a nested per-branch breakdown (real
     # branch-product need computed from sales history, not an empty stub)
     body = r.text.split("Split result,")[1]
-    assert "<b>" in body and "Weekly sales" in body
+    assert "<b>" in body and "Rec. Qty" in body
 
 
 def test_weekly_order_scopes_to_the_selected_branch(web, db):
@@ -402,8 +402,10 @@ def test_weekly_order_scopes_to_the_selected_branch(web, db):
     # contain an unrelated X-Requested-With fetch header)
     results = body.split("<script>")[0]
     assert "<th class=\"num\">Requested</th>" not in results
-    # "On hand" justifies a Rec. Qty lower than Weekly sales
-    assert "On hand" in results
+    # no Weekly sales / On hand columns - on-hand isn't trusted for
+    # allocation right now, same as a custom split
+    assert "Weekly sales" not in results and "On hand" not in results
+    assert "Rec. Qty" in results
 
 
 def test_weekly_order_route_caps_to_uploaded_warehouse_stock(web, db):
@@ -972,6 +974,48 @@ def test_unified_split_weekly_order_mode(web):
     # the PDF export is a filled Stock-Movement dispatch note (Rec. Qty column)
     p = web.get("/download/split-result?fmt=pdf")
     assert p.status_code == 200 and p.content[:5] == b"%PDF-"
+
+
+def test_weekly_order_rec_qty_is_sales_based_not_a_copy_of_the_request(db):
+    """A branch's Rec. Qty must reflect what its own sales actually justify
+    (a week's cover plus transit, less on-hand) - not simply echo back
+    whatever quantity it typed into the request file. Requesting far more
+    than sales justify must come back reduced, not honoured in full."""
+    import numpy as np
+    from wms.analytics import weekly_forecast as wfc
+    from wms.services import stock as stock_svc
+    from wms.web import routes as wr
+
+    if not wfc.has_data():
+        pytest.skip("no weekly_sales files present")
+    st = wfc.cached_run()["state"]
+    inv = stock_svc.levels_df_for_allocation(db)
+    on_hand = ({(str(r.branch_code).upper(), str(r.sku).upper()): int(r.on_hand or 0)
+                for r in inv.itertuples()} if not inv.empty else {})
+
+    row = target = None
+    for r in st.itertuples():
+        rate = max(float(r.weekly_demand or 0), float(getattr(r, "recent_sales", 0) or 0))
+        if rate < 5:
+            continue
+        bc = str(r.branch).upper()
+        t = int(np.ceil(rate * 10 / 7)) - on_hand.get((bc, str(r.sku).upper()), 0)
+        if t > 0:
+            row, target = r, t
+            break
+    if row is None:
+        pytest.skip("no real-moving branch/SKU in the sample data")
+
+    bc, sku = str(row.branch).upper(), str(row.sku)
+    huge_request = target * 50                         # far more than sales could justify
+    branch_files = [(bc, {"lines": [{"sku": sku, "requested_qty": huge_request}]})]
+    batch = wr._run_weekly_split(db, [(sku, huge_request)], branch_files)
+
+    assert batch["rows"], "expected one row for the requested SKU"
+    row_out = batch["rows"][0]
+    match = next(a for a in row_out["allocations"] if a["requested"] == huge_request)
+    assert match["allocated"] < huge_request / 2        # reduced, not honoured in full
+    assert match["allocated"] <= target + 2             # (±2, the close-to-target snap margin)
 
 
 def test_weekly_order_zip_and_per_branch_downloads(web):

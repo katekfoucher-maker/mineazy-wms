@@ -130,6 +130,32 @@ def test_reject_deletes_a_pending_signup_only(web, db, monkeypatch):
     assert db.query(User).filter(User.username == "controller").first() is not None
 
 
+def test_login_page_offers_sign_in_with_google(web, monkeypatch):
+    from wms.services import google_oauth
+    monkeypatch.setattr(google_oauth, "configured", lambda: True)
+    r = web.get("/login")
+    assert 'href="/auth/google/start?from_page=login"' in r.text
+    assert "Sign in with Google" in r.text
+
+
+def test_google_start_from_login_returns_errors_to_login_not_signup(web, monkeypatch):
+    from wms.services import google_oauth
+    monkeypatch.setattr(google_oauth, "configured", lambda: True)
+    r = web.get("/auth/google/start?from_page=login", follow_redirects=False)
+    assert r.status_code == 303
+    # a tampered/expired state (no prior /auth/google/start in this request)
+    r2 = web.get("/auth/google/callback?code=abc&state=bogus", follow_redirects=False)
+    assert r2.status_code == 303 and r2.headers["location"] == "/login"
+
+
+def test_google_start_from_signup_still_returns_errors_to_signup(web, monkeypatch):
+    from wms.services import google_oauth
+    monkeypatch.setattr(google_oauth, "configured", lambda: True)
+    web.get("/auth/google/start", follow_redirects=False)
+    r = web.get("/auth/google/callback?code=abc&state=bogus", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/signup"
+
+
 def test_email_signup_creates_a_pending_standard_user(web, db):
     from wms.models import User
 

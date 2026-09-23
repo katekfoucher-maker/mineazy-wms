@@ -367,27 +367,22 @@ def weekly_dispatch_branch_workbook(bb: dict, *, out_dir: Optional[Path] = None,
                                     doc_title: str = "Weekly order") -> Path:
     """One branch's order document (from a split-tool ``by_branch`` entry -
     see ``wms.web.routes._run_auto_weekly_order`` / ``_run_weekly_split`` /
-    ``_run_split_batch``) as a standalone workbook: SKU, Product, Weekly
-    sales, On hand and Requested (only when the source split tracked them -
-    a one-off split doesn't) and Rec. Qty, ready to hand to the branch or the
-    distribution centre. Used for both the single-branch download and each
-    file inside a multi-branch ZIP."""
+    ``_run_split_batch``) as a standalone workbook: SKU, Product, Requested
+    (only when the source split tracked it - a one-off split doesn't) and
+    Rec. Qty, ready to hand to the branch or the distribution centre. Used
+    for both the single-branch download and each file inside a multi-branch
+    ZIP. No Weekly sales / On hand columns - on-hand isn't trusted for
+    allocation right now, and Rec. Qty already is the sales-based number."""
     lines = bb.get("lines", []) or []
     has_req = any(l.get("requested") for l in lines)
-    has_oh = any(l.get("on_hand") is not None for l in lines)
-    cols = ["SKU", "Product", "Weekly sales"]
-    if has_oh:
-        cols.append("On hand")
+    cols = ["SKU", "Product"]
     if has_req:
         cols.append("Requested")
     cols.append("Rec. Qty")
 
     rows = []
     for l in lines:
-        d = {"SKU": l.get("sku"), "Product": l.get("description"),
-             "Weekly sales": l.get("predicted")}
-        if has_oh:
-            d["On hand"] = l.get("on_hand")
+        d = {"SKU": l.get("sku"), "Product": l.get("description")}
         if has_req:
             d["Requested"] = l.get("requested")
         d["Rec. Qty"] = l.get("rec")

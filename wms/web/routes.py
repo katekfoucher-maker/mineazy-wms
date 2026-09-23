@@ -102,7 +102,8 @@ def login_form(request: Request, user=Depends(current_user)):
         return RedirectResponse("/", 303)
     from wms.web.deps import templates
     return templates.TemplateResponse("login.html", {
-        "request": request, "flashes": pop_flashes(request)})
+        "request": request, "flashes": pop_flashes(request),
+        "google_configured": google_oauth.configured()})
 
 
 @router.post("/login")
@@ -205,10 +206,12 @@ def signup_email(request: Request, full_name: str = Form(...), email: str = Form
 
 
 @router.get("/auth/google/start")
-def google_start(request: Request):
+def google_start(request: Request, from_page: str = "signup"):
+    origin = "login" if from_page == "login" else "signup"
+    request.session["oauth_from"] = origin
     if not google_oauth.configured():
         flash(request, "Google sign-in isn't set up yet. Contact the administrator.", "error")
-        return RedirectResponse("/signup", 303)
+        return RedirectResponse(f"/{origin}", 303)
     state = google_oauth.new_state()
     request.session["oauth_state"] = state
     return RedirectResponse(google_oauth.auth_url(_google_redirect_uri(request), state), 303)
@@ -217,19 +220,20 @@ def google_start(request: Request):
 @router.get("/auth/google/callback")
 def google_callback(request: Request, code: str = "", state: str = "", error: str = "",
                     db: Session = Depends(db_session)):
+    origin = request.session.pop("oauth_from", "signup")
     expected_state = request.session.pop("oauth_state", None)
     if error:
         flash(request, "Google sign-in was cancelled.", "error")
-        return RedirectResponse("/signup", 303)
+        return RedirectResponse(f"/{origin}", 303)
     if not code or not state or not expected_state or state != expected_state:
         flash(request, "Google sign-in failed (the request expired or was tampered with). Try again.", "error")
-        return RedirectResponse("/signup", 303)
+        return RedirectResponse(f"/{origin}", 303)
 
     try:
         claims = google_oauth.exchange_code(code, _google_redirect_uri(request))
     except google_oauth.GoogleAuthError as e:
         flash(request, str(e), "error")
-        return RedirectResponse("/signup", 303)
+        return RedirectResponse(f"/{origin}", 303)
 
     u = db.query(User).filter(User.google_sub == claims["sub"]).first()
     if u is None:
@@ -1178,17 +1182,25 @@ def _run_weekly_split(db, pairs, branch_files) -> dict:
     Rec. Qty column set from the allocation.
     """
     from wms.services import stock as stock_svc
+    from wms.config import get_settings
+
+    cover_days = getattr(get_settings(), "review_period_days", 7) + \
+        getattr(get_settings(), "dispatch_transit_days", 3)
 
     st = weekly_fc.cached_run().get("state")
     name_by_code = {b.code.upper(): b.name for b in db.query(Branch).all()}
     fc, item_by_sku = {}, {}
     if st is not None and not st.empty:
         for r in st.itertuples():
-            fc[(str(r.branch).upper(), str(r.sku).upper())] = float(r.weekly_demand or 0)
+            # a recent spike outranks a model forecast that hasn't caught up
+            # yet - same recency rule the Allocation plan and auto weekly
+            # order already use
+            rate = max(float(r.weekly_demand or 0), float(getattr(r, "recent_sales", 0) or 0))
+            fc[(str(r.branch).upper(), str(r.sku).upper())] = rate
             item_by_sku.setdefault(str(r.sku).upper(), str(r.item or "").strip())
     prod_name = {p.sku.upper(): p.name for p in db.query(Product).all()}
 
-    inv = stock_svc.levels_df(db)
+    inv = stock_svc.levels_df_for_allocation(db)
     on_hand: dict = {}
     if not inv.empty:
         for r in inv.itertuples():
@@ -1228,7 +1240,16 @@ def _run_weekly_split(db, pairs, branch_files) -> dict:
                          "allocations": [], "allocated_total": 0, "warehouse": qv})
             continue
         weights = {bc: max(0.0, fc.get((bc, sk_u), 0.0)) for bc in want}
-        caps = {bc: max(0, int(want[bc])) for bc in want}
+        # the branch's own request is a ceiling, never a target - what it
+        # actually needs is a week's cover (plus transit) of its real sales
+        # rate, less what it already has on hand; a branch that asked for
+        # more than that shouldn't get the excess just because it asked
+        caps = {}
+        for bc in want:
+            rate = fc.get((bc, sk_u), 0.0)
+            oh = on_hand.get((bc, sk_u), 0)
+            target = max(0, int(np.ceil(rate * cover_days / 7)) - oh) if rate > 0 else 0
+            caps[bc] = min(int(want[bc]), target) if rate > 0 else int(want[bc])
         got = allocation._split_capped(qv, weights, caps)
         allocs = []
         for bc in sorted(want, key=lambda c: (-got.get(c, 0), c)):
