@@ -138,6 +138,12 @@ def test_login_page_offers_sign_in_with_google(web, monkeypatch):
     assert "Sign in with Google" in r.text
 
 
+def test_login_password_field_has_a_show_hide_toggle(web):
+    r = web.get("/login")
+    assert 'id="pw-eye"' in r.text and 'id="pw-input"' in r.text
+    assert 'type="password"' in r.text
+
+
 def test_google_start_from_login_returns_errors_to_login_not_signup(web, monkeypatch):
     from wms.services import google_oauth
     monkeypatch.setattr(google_oauth, "configured", lambda: True)
