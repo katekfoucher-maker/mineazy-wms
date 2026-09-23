@@ -155,6 +155,14 @@ _SLOW_WEEKS_SOLD  = 4      # ... or the busiest branch has sold in <= this many 
 _VERY_SLOW_NET_WEEKLY = 1.0
 _VERY_SLOW_WEEKS_SOLD = 2
 
+# probing untested branches (see allocate_by_forecast): a probe below this
+# many units is a fragment, not a real test, so it caps how many branches
+# share what's left of a split; _PROBE_RESERVE_FRACTION additionally keeps
+# that fraction of the remaining quantity held back at the warehouse
+# whenever more than one branch is being probed at once.
+_MIN_PROBE_QTY = 3
+_PROBE_RESERVE_FRACTION = 0.25
+
 
 def _split_capped(total: int, weights: dict, caps: dict) -> dict:
     """Hand out ``total`` whole units across the keys of ``caps`` roughly in
@@ -265,17 +273,14 @@ def allocate_by_forecast(db: Session, *, sku, qty: int,
     if picked:
         universe = [(c, n) for c, n in universe if c in picked]
 
-    per_sku = rows_fc if (rows_fc is not None and not rows_fc.empty) else None
-    if per_sku is not None and picked:
+    # a product with no forecast history anywhere (or none at the chosen
+    # branches) isn't "no demand" any more than an untested branch is - it's
+    # simply unproven. Rather than dumping the whole quantity to warehouse
+    # hold, fall through with an empty per_sku: every branch in scope ends up
+    # "untested" below and gets a real, branch-size-scaled probe instead.
+    per_sku = rows_fc if rows_fc is not None else st.iloc[0:0]
+    if picked:
         per_sku = per_sku[per_sku["branch"].str.upper().isin(picked)]
-        if per_sku.empty:
-            per_sku = None
-    if per_sku is None:
-        note = ("none of the chosen branches have a forecast for this product"
-                if picked else "this product is not in the weekly forecast model")
-        return {"product": sku_code, "description": name, "qty": qty,
-                "allocations": [], "allocated_total": 0, "warehouse": qty,
-                "branches": picked, "note": note, "slow": None, "very_slow": None}
 
     uni_codes = {c for c, _n in universe}
     rate: dict = {}
@@ -366,21 +371,35 @@ def allocate_by_forecast(db: Session, *, sku, qty: int,
             per_size = [alloc[c] / branch_size[c] for c in covered
                        if branch_size.get(c, 0.0) > 0]
             yield_per_size = (sum(per_size) / len(per_size)) if per_size else 0.0
-            untested_size_total = sum(branch_size.get(c, 0.0) for c in untested)
-            for c in sorted(untested, key=lambda c: -branch_size.get(c, 0.0)):
-                if remaining <= 0:
+
+            # thin stock spread across every untested branch turns into
+            # fragments that tell the network nothing - test a few branches
+            # properly (biggest first) and hold the rest, instead of probing
+            # everywhere at once. And when there IS enough to probe several
+            # branches, don't spend the whole remaining quantity on it either
+            # - a split still isn't a bulk restock, so some stays held back.
+            ranked = sorted(untested, key=lambda c: -branch_size.get(c, 0.0))
+            probe_budget = (remaining if len(ranked) <= 1
+                            else int(remaining * (1 - _PROBE_RESERVE_FRACTION)))
+            max_branches = max(1, probe_budget // _MIN_PROBE_QTY)
+            ranked = ranked[:max_branches]
+
+            untested_size_total = sum(branch_size.get(c, 0.0) for c in ranked)
+            for c in ranked:
+                if remaining <= 0 or probe_budget <= 0:
                     break
                 size = branch_size.get(c, 0.0)
                 if yield_per_size > 0:
                     give = int(round(yield_per_size * size))
                 elif untested_size_total > 0:
-                    give = int(round(remaining * size / untested_size_total))
+                    give = int(round(probe_budget * size / untested_size_total))
                 else:
                     give = 1
-                give = max(1, min(give, remaining))
+                give = max(1, min(give, remaining, probe_budget))
                 alloc[c] += give
                 probes[c] = give
                 remaining -= give
+                probe_budget -= give
 
     # everything left over stays at the warehouse - a split does not bulk-restock
     warehouse = max(0, remaining)

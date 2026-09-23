@@ -127,7 +127,20 @@ def logout(request: Request):
 # ---- self-service signup ("Standard User" role: Google-verified, then
 # needs a "users.admin" holder to approve it on /users before first login) --
 def _google_redirect_uri(request: Request) -> str:
-    return str(request.base_url).rstrip("/") + "/auth/google/callback"
+    """The app sits behind a TLS-terminating proxy on both deployments
+    (CloudFront -> EC2 over plain HTTP; Render's own proxy) - request.url.scheme
+    is always "http" as seen from here, which built a redirect_uri Google's
+    OAuth client rejected (registered as https, sent as http). CloudFront's
+    own forwarded-protocol header takes priority since it's what the viewer
+    actually used; X-Forwarded-Proto covers Render and any other standard
+    reverse proxy."""
+    scheme = (request.headers.get("cloudfront-forwarded-proto")
+              or request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+              or request.url.scheme)
+    base = str(request.base_url).rstrip("/")
+    if scheme == "https" and base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    return base + "/auth/google/callback"
 
 
 def _unique_username(db: Session, base: str) -> str:
