@@ -386,29 +386,13 @@ def allocate_by_forecast(db: Session, *, sku, qty: int,
         })
     allocs.sort(key=lambda d: (d["allocated"], d["predicted"]), reverse=True)
 
-    bits = []
-    if slow:
-        bits.append(f"slow mover, ~{net_weekly:.1f}/wk across the network, "
-                    f"capped at {cover} weeks cover per branch")
-    if probes:
-        bits.append(f"{sum(probes.values())} probe unit(s) to {len(probes)} "
-                    f"branch(es) with no recent sales")
-    if seeds:
-        bits.append(f"{sum(seeds.values())} unit(s) seeded to {len(seeds)} "
-                    f"branch(es) with no recent sales, sized off the network's "
-                    f"own lowest-selling branch")
-    if warehouse:
-        bits.append(f"{warehouse} unit(s) held at the warehouse (more than the "
-                    f"branches can move)")
-    note = "; ".join(bits) or None
-
     return {
         "product": sku_code, "description": name, "qty": qty,
         "allocated_total": int(sum(alloc.values())),
         "warehouse": int(warehouse),
         "allocations": allocs, "branches": picked,
         "slow": bool(slow), "very_slow": bool(very_slow),
-        "cover_weeks": cover, "note": note,
+        "cover_weeks": cover, "note": None,
     }
 
 

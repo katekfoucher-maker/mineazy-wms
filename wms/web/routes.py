@@ -1277,7 +1277,7 @@ def _run_auto_weekly_order(db, brs: list[str], warehouse_pairs=None) -> dict:
     s = get_settings()
     cover_days = getattr(s, "review_period_days", 7) + getattr(s, "dispatch_transit_days", 3)
 
-    inv = stock_svc.levels_df(db)
+    inv = stock_svc.levels_df_for_allocation(db)
     on_hand: dict = {}
     if not inv.empty:
         for r in inv.itertuples():

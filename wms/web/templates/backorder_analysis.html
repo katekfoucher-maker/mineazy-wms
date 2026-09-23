@@ -577,6 +577,27 @@ var BRANCH_ID_BY_CODE = { {% for b in branches %}"{{ b.code|upper }}": {{ b.id }
   var salesPanel = document.getElementById('sales-panel');
   if (!salesPanel) return;
 
+  // A filter change re-fetches and swaps a whole panel, which can take a
+  // couple of seconds (the endpoint renders the full page server-side) - the
+  // panel's own opacity dim during that wait is easy to miss at a glance, so
+  // pair it with an unmissable fixed badge, always in view regardless of
+  // scroll position, that says a refresh is actually in progress.
+  var updatingBadge = null;
+  function showUpdating(){
+    if (!updatingBadge) {
+      updatingBadge = document.createElement('div');
+      updatingBadge.textContent = 'Updating…';
+      updatingBadge.style.cssText = 'position:fixed;top:14px;right:18px;z-index:999;'
+        + 'background:var(--brand-deep,#2b3a8c);color:#fff;font:600 12.5px/1 system-ui,sans-serif;'
+        + 'padding:8px 14px;border-radius:20px;box-shadow:0 4px 14px rgba(30,40,90,.25)';
+      document.body.appendChild(updatingBadge);
+    }
+    updatingBadge.style.display = 'block';
+  }
+  function hideUpdating(){
+    if (updatingBadge) updatingBadge.style.display = 'none';
+  }
+
   // "Worst performing products": clicking a product opens a popup with its
   // own sales-trend chart (filtered to that product, and to the branch this
   // list is currently scoped to, if any) - a peek, not a change to the page's
@@ -705,6 +726,7 @@ var BRANCH_ID_BY_CODE = { {% for b in branches %}"{{ b.code|upper }}": {{ b.id }
       var el = document.getElementById(id);
       if (el) { el.style.opacity = '.45'; el.style.pointerEvents = 'none'; }
     });
+    showUpdating();
     // getBoundingClientRect() immediately after an innerHTML swap is not
     // reliably settled here - the same read can occasionally still reflect a
     // pre-layout state, so the scroll compensation below silently computes
@@ -723,6 +745,7 @@ var BRANCH_ID_BY_CODE = { {% for b in branches %}"{{ b.code|upper }}": {{ b.id }
       .then(function(html){
         if (mine !== seq) return;              // superseded: drop this response
         inflight = null;
+        hideUpdating();
         var doc = new DOMParser().parseFromString(html, 'text/html');
         var pending = [];                      // [id, beforeTopOrNull]
         ids.forEach(function(id){
@@ -754,7 +777,7 @@ var BRANCH_ID_BY_CODE = { {% for b in branches %}"{{ b.code|upper }}": {{ b.id }
       })
       .catch(function(err){
         if (err && err.name === 'AbortError') return;   // expected on supersede
-        if (mine === seq) location.href = url;
+        if (mine === seq) { hideUpdating(); location.href = url; }
       });
   }
 

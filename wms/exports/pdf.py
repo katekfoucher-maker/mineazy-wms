@@ -165,13 +165,9 @@ def split_allocation_pdf(db, *, sku: str, qty: int, branch_codes=None,
         f"Product: {prod_line}\n"
         f"Quantity to split: {int(qty or 0):,}\n"
         f"Branches: {scope_lbl}"), new_x="LMARGIN", new_y="NEXT")
-    if res.get("note"):
-        pdf.set_text_color(150, 0, 0)
-        pdf.multi_cell(0, 6, _lat1(res["note"]), new_x="LMARGIN", new_y="NEXT")
-        pdf.set_text_color(0)
     pdf.ln(2)
 
-    cols = [("Branch", 90), ("Predicted weekly sales", 55), ("Allocation", 35)]
+    cols = [("Branch", 145), ("Allocation", 35)]
     pdf.set_font("Helvetica", "B", 9)
     pdf.set_fill_color(31, 56, 100)
     pdf.set_text_color(255)
@@ -184,15 +180,13 @@ def split_allocation_pdf(db, *, sku: str, qty: int, branch_codes=None,
     for a in allocs:
         pdf.set_fill_color(244, 246, 250)
         pdf.cell(cols[0][1], 6, _lat1(a["branch"])[:56], border="LR", fill=fill)
-        pdf.cell(cols[1][1], 6, f"{int(a['predicted']):,}", border="LR",
-                 align="R", fill=fill)
-        pdf.cell(cols[2][1], 6, f"{int(a['allocated']):,}", border="LR",
+        pdf.cell(cols[1][1], 6, f"{int(a['allocated']):,}", border="LR",
                  align="R", fill=fill)
         pdf.ln()
         fill = not fill
     pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(cols[0][1] + cols[1][1], 7, "Total", border="T", align="R")
-    pdf.cell(cols[2][1], 7, f"{int(res.get('allocated_total', 0)):,}",
+    pdf.cell(cols[0][1], 7, "Total", border="T", align="R")
+    pdf.cell(cols[1][1], 7, f"{int(res.get('allocated_total', 0)):,}",
              border="T", align="R")
 
     scope = "-".join(branch_codes) if branch_codes else "all"
@@ -232,7 +226,7 @@ def split_allocation_batch_pdf(db, *, pairs, branch_codes=None,
         f"Generated: {_ts()}"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
-    cols = [("Branch", 90), ("Predicted weekly sales", 55), ("Allocation", 35)]
+    cols = [("Branch", 145), ("Allocation", 35)]
     for sku, qty in clean:
         res = allocation.allocate_by_forecast(db, sku=sku, qty=qty,
                                               branch_codes=branch_codes)
@@ -248,10 +242,6 @@ def split_allocation_batch_pdf(db, *, pairs, branch_codes=None,
         pdf.set_font("Helvetica", "", 9)
         pdf.cell(0, 5, _lat1(f"{sku}   Quantity to split: {qty:,}"),
                  new_x="LMARGIN", new_y="NEXT")
-        if res.get("note"):
-            pdf.set_text_color(150, 0, 0)
-            pdf.multi_cell(0, 5, _lat1(res["note"]), new_x="LMARGIN", new_y="NEXT")
-            pdf.set_text_color(0)
         pdf.ln(1)
 
         pdf.set_font("Helvetica", "B", 9)
@@ -268,9 +258,7 @@ def split_allocation_batch_pdf(db, *, pairs, branch_codes=None,
             tag = {"probe": "  (probe)", "seed": "  (new branch)"}.get(a.get("kind"), "")
             lbl = a["branch"] + tag
             pdf.cell(cols[0][1], 6, _lat1(lbl)[:56], border="LR", fill=fill)
-            pdf.cell(cols[1][1], 6, f"{int(a['predicted']):,}", border="LR",
-                     align="R", fill=fill)
-            pdf.cell(cols[2][1], 6, f"{int(a['allocated']):,}", border="LR",
+            pdf.cell(cols[1][1], 6, f"{int(a['allocated']):,}", border="LR",
                      align="R", fill=fill)
             pdf.ln()
             fill = not fill
@@ -278,12 +266,11 @@ def split_allocation_batch_pdf(db, *, pairs, branch_codes=None,
         if wh:
             pdf.set_fill_color(244, 246, 250)
             pdf.cell(cols[0][1], 6, _lat1("Warehouse (hold)"), border="LR", fill=fill)
-            pdf.cell(cols[1][1], 6, "", border="LR", fill=fill)
-            pdf.cell(cols[2][1], 6, f"{wh:,}", border="LR", align="R", fill=fill)
+            pdf.cell(cols[1][1], 6, f"{wh:,}", border="LR", align="R", fill=fill)
             pdf.ln()
         pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(cols[0][1] + cols[1][1], 7, "Total", border="T", align="R")
-        pdf.cell(cols[2][1], 7, f"{int(res.get('allocated_total', 0)) + wh:,}",
+        pdf.cell(cols[0][1], 7, "Total", border="T", align="R")
+        pdf.cell(cols[1][1], 7, f"{int(res.get('allocated_total', 0)) + wh:,}",
                  border="T", align="R")
         pdf.ln()
 
@@ -318,10 +305,9 @@ def split_batch_pdf(batch: dict, *, out_dir: Optional[Path] = None) -> Path:
     pdf.ln(2)
 
     if weekly:
-        cols = [("Branch", 66), ("Predicted weekly sales", 44),
-                ("Requested", 30), ("Allocation", 30)]
+        cols = [("Branch", 100), ("Requested", 40), ("Allocation", 40)]
     else:
-        cols = [("Branch", 90), ("Predicted weekly sales", 55), ("Allocation", 35)]
+        cols = [("Branch", 145), ("Allocation", 35)]
 
     for r in rows:
         name = str(r.get("product") or r.get("sku") or "")
@@ -357,11 +343,9 @@ def split_batch_pdf(batch: dict, *, out_dir: Optional[Path] = None) -> Path:
             tag = {"probe": "  (probe)", "seed": "  (new branch)"}.get(a.get("kind"), "")
             lbl = str(a.get("branch", "")) + tag
             pdf.cell(cols[0][1], 6, _lat1(lbl)[:44], border="LR", fill=fill)
-            pdf.cell(cols[1][1], 6, f"{int(a.get('predicted') or 0):,}", border="LR",
-                     align="R", fill=fill)
             if weekly:
                 rq = a.get("requested")
-                pdf.cell(cols[2][1], 6, "" if rq is None else f"{int(rq):,}",
+                pdf.cell(cols[1][1], 6, "" if rq is None else f"{int(rq):,}",
                          border="LR", align="R", fill=fill)
             pdf.cell(cols[-1][1], 6, f"{int(a.get('allocated') or 0):,}", border="LR",
                      align="R", fill=fill)

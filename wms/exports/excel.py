@@ -164,11 +164,10 @@ def split_allocation_workbook(db, *, sku: str, qty: int, branch_codes=None,
                                           branch_codes=branch_codes)
     rows = pd.DataFrame(res.get("allocations", []))
     if not rows.empty:
-        rows = rows.rename(columns={"branch": "Branch",
-                                    "predicted": "Predicted weekly sales",
-                                    "allocated": "Allocation"})
+        rows = rows.rename(columns={"branch": "Branch", "allocated": "Allocation"})
+        rows = rows[["Branch", "Allocation"]]
     else:
-        rows = pd.DataFrame(columns=["Branch", "Predicted weekly sales", "Allocation"])
+        rows = pd.DataFrame(columns=["Branch", "Allocation"])
     scope = "-".join(branch_codes) if branch_codes else "all"
     _desc = str(res.get("description") or "").strip()
     _prod = str(res.get("product") or sku)
@@ -205,18 +204,19 @@ def split_allocation_batch_workbook(db, *, pairs, branch_codes=None,
         prod = str(res.get("product") or sku)
         name = f"{prod} - {desc}" if desc and desc != prod else prod
         wh = int(res.get("warehouse", 0) or 0)
+        _basis = {"probe": "probe", "seed": "seed", "held": "no stock left",
+                  "none": "no demand"}
         for a in res.get("allocations", []):
             detail_rows.append({
                 "Product": name, "SKU": sku, "Qty to split": qty,
                 "Branch": a.get("branch"),
-                "Weekly sales": a.get("predicted"),
                 "Allocation": a.get("allocated"),
-                "Basis": a.get("kind") if a.get("kind") in ("probe", "seed") else "cover",
+                "Basis": _basis.get(a.get("kind"), "cover"),
             })
         if wh:
             detail_rows.append({
                 "Product": name, "SKU": sku, "Qty to split": qty,
-                "Branch": "Warehouse (hold)", "Weekly sales": None,
+                "Branch": "Warehouse (hold)",
                 "Allocation": wh, "Basis": "hold",
             })
         row = {
@@ -224,16 +224,12 @@ def split_allocation_batch_workbook(db, *, pairs, branch_codes=None,
             "Sent to branches": res.get("allocated_total", 0),
             "Held at warehouse": wh,
         }
-        if res.get("note"):
-            row["Reasoning"] = str(res["note"])
         summary_rows.append(row)
 
     detail_cols = ["Product", "SKU", "Qty to split", "Branch",
-                   "Weekly sales", "Allocation", "Basis"]
+                   "Allocation", "Basis"]
     summary_cols = ["Product", "SKU", "Qty to split", "Sent to branches",
                     "Held at warehouse"]
-    if any("Reasoning" in r for r in summary_rows):
-        summary_cols.append("Reasoning")
     detail = pd.DataFrame(detail_rows, columns=detail_cols)
     summary = pd.DataFrame(summary_rows, columns=summary_cols)
     about = pd.DataFrame([
@@ -260,18 +256,19 @@ def split_batch_workbook(batch: dict, *, out_dir: Optional[Path] = None) -> Path
         sku = str(r.get("sku") or "")
         qty = int(r.get("qty") or 0)
         wh = int(r.get("warehouse") or 0)
+        _basis = {"probe": "probe", "seed": "seed", "held": "no stock left",
+                  "none": "no demand"}
         for a in r.get("allocations", []):
             d = {"Product": name, "SKU": sku, "Qty to split": qty,
                  "Branch": a.get("branch"),
-                 "Weekly sales": a.get("predicted"),
                  "Allocation": a.get("allocated"),
-                 "Basis": a.get("kind") if a.get("kind") in ("probe", "seed") else "cover"}
+                 "Basis": _basis.get(a.get("kind"), "cover")}
             if weekly:
                 d["Requested"] = a.get("requested")
             detail_rows.append(d)
         if wh:
             d = {"Product": name, "SKU": sku, "Qty to split": qty,
-                 "Branch": "Warehouse (hold)", "Weekly sales": None,
+                 "Branch": "Warehouse (hold)",
                  "Allocation": wh, "Basis": "hold"}
             if weekly:
                 d["Requested"] = None
@@ -283,7 +280,7 @@ def split_batch_workbook(batch: dict, *, out_dir: Optional[Path] = None) -> Path
             s["Reasoning"] = str(r["note"])
         summary_rows.append(s)
 
-    detail_cols = ["Product", "SKU", "Qty to split", "Branch", "Weekly sales",
+    detail_cols = ["Product", "SKU", "Qty to split", "Branch",
                    "Allocation", "Basis"] + (["Requested"] if weekly else [])
     summary_cols = ["Product", "SKU", "Qty to split", "Sent to branches",
                     "Held at warehouse"]

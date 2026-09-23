@@ -313,7 +313,7 @@ def test_allocation_split_tool_splits_by_predicted_sales(web):
                  data={"split_mode": "oneoff", "man_sku": str(sku), "man_qty": "40"})
     assert r.status_code == 200
     body = r.text.split("Split result,")[1]
-    assert "Weekly sales" in body and ">Allocation<" in body
+    assert ">Allocation<" in body
     # the removed narration is gone
     assert "sales over the last" not in body and "unallocated" not in body
     # the default "by product" view (the "by branch" view repeats the same

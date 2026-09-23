@@ -331,25 +331,23 @@ function upName(inp){
               <p class="mini muted" style="margin:4px 0 0">Nothing to allocate.</p>
             {% else %}
             <div class="tbl-wrap" style="max-width:640px"><table class="fit">
-              <thead><tr><th>Branch</th><th class="num">Weekly sales</th>
+              <thead><tr><th>Branch</th>
                 <th class="num">Allocation</th></tr></thead>
               <tbody>
               {% for a in it.allocations %}
                 <tr><td>{{ a.branch }}
                     {% if a.kind == 'probe' %} <span class="mini">probe</span>
                     {% elif a.kind == 'seed' %} <span class="mini">new branch</span>
-                    {% elif a.kind == 'held' %} <span class="mini muted">on hand covers it</span>
+                    {% elif a.kind == 'held' %} <span class="mini muted">no stock left to allocate</span>
                     {% elif a.kind == 'none' %} <span class="mini muted">no demand here</span>
                     {% endif %}</td>
-                  <td class="num">{{ '{:,}'.format(a.predicted) }}</td>
                   <td class="num{% if a.allocated %} fc-hi{% endif %}">{{ '{:,}'.format(a.allocated) }}</td></tr>
               {% endfor %}
               {% if it.warehouse %}
                 <tr><td>Warehouse <span class="mini">hold</span></td>
-                  <td class="num"></td>
                   <td class="num">{{ '{:,}'.format(it.warehouse) }}</td></tr>
               {% endif %}
-              <tr><th>Total</th><th class="num"></th>
+              <tr><th>Total</th>
                 <th class="num">{{ '{:,}'.format(it.allocated_total + it.warehouse) }}</th></tr>
               </tbody>
             </table></div>

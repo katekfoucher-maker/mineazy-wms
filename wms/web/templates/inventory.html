@@ -55,6 +55,36 @@
   </div>
 </div>
 
+<div class="card">
+  <div class="card-head"><h2>{{ m.ic('box') }} Stock on hand</h2></div>
+
+  {% if can(user.role, 'backorder.enter') %}
+  <div class="uploads" style="margin-bottom:18px">
+    <form class="upload" method="post" action="/allocation/upload" enctype="multipart/form-data">
+      <input type="hidden" name="kind" value="inventory">
+      <h4>Branch inventory <span class="sub">replaces the branch's stock-on-hand snapshot</span></h4>
+      <select name="branch_code" required aria-label="Branch">
+        <option value="">Which branch…</option>
+        {% for b in branches %}<option value="{{ b.code }}">{{ b.code }} — {{ b.name }}</option>{% endfor %}
+      </select>
+      <label class="drop">
+        {{ m.ic('upload') }}
+        <span class="name" data-placeholder="Choose an .xlsx or .csv">Choose an .xlsx or .csv</span>
+        <input type="file" name="file" accept=".xlsx,.xls,.csv" required onchange="upName(this)">
+      </label>
+      <button type="submit">Update inventory</button>
+    </form>
+  </div>
+  <script>
+  function upName(inp){
+    var d = inp.closest('.drop'), s = d.querySelector('.name');
+    if (inp.files && inp.files.length){ s.textContent = inp.files[0].name; d.classList.add('has'); }
+    else { s.textContent = s.dataset.placeholder; d.classList.remove('has'); }
+  }
+  </script>
+  {% endif %}
+</div>
+
 <div class="card" id="stock-by-product">
   <div class="card-head"><h2>Stock by product</h2></div>
   <form class="inline" method="get" action="/branches">
@@ -154,36 +184,6 @@
   </table></div>
   {% else %}
     <p class="mini muted" style="margin:8px 0 0">No excess stock{% if excess_bcode %} for this branch{% endif %} found.</p>
-  {% endif %}
-</div>
-
-<div class="card">
-  <div class="card-head"><h2>{{ m.ic('box') }} Stock on hand</h2></div>
-
-  {% if can(user.role, 'backorder.enter') %}
-  <div class="uploads" style="margin-bottom:18px">
-    <form class="upload" method="post" action="/allocation/upload" enctype="multipart/form-data">
-      <input type="hidden" name="kind" value="inventory">
-      <h4>Branch inventory <span class="sub">replaces the branch's stock-on-hand snapshot</span></h4>
-      <select name="branch_code" required aria-label="Branch">
-        <option value="">Which branch…</option>
-        {% for b in branches %}<option value="{{ b.code }}">{{ b.code }} — {{ b.name }}</option>{% endfor %}
-      </select>
-      <label class="drop">
-        {{ m.ic('upload') }}
-        <span class="name" data-placeholder="Choose an .xlsx or .csv">Choose an .xlsx or .csv</span>
-        <input type="file" name="file" accept=".xlsx,.xls,.csv" required onchange="upName(this)">
-      </label>
-      <button type="submit">Update inventory</button>
-    </form>
-  </div>
-  <script>
-  function upName(inp){
-    var d = inp.closest('.drop'), s = d.querySelector('.name');
-    if (inp.files && inp.files.length){ s.textContent = inp.files[0].name; d.classList.add('has'); }
-    else { s.textContent = s.dataset.placeholder; d.classList.remove('has'); }
-  }
-  </script>
   {% endif %}
 </div>
 
