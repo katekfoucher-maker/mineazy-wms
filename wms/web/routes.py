@@ -130,15 +130,18 @@ def _google_redirect_uri(request: Request) -> str:
     """The app sits behind a TLS-terminating proxy on both deployments
     (CloudFront -> EC2 over plain HTTP; Render's own proxy) - request.url.scheme
     is always "http" as seen from here, which built a redirect_uri Google's
-    OAuth client rejected (registered as https, sent as http). CloudFront's
-    own forwarded-protocol header takes priority since it's what the viewer
-    actually used; X-Forwarded-Proto covers Render and any other standard
-    reverse proxy."""
+    OAuth client rejected (registered as https, sent as http). Render sets
+    X-Forwarded-Proto reliably; CloudFront's custom-origin config here does
+    not forward any usable proto header at all, so this also falls back to
+    "any non-local host is one of the two HTTPS-only deployments" - neither
+    deployment is ever actually served over plain HTTP in practice."""
     scheme = (request.headers.get("cloudfront-forwarded-proto")
               or request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
               or request.url.scheme)
     base = str(request.base_url).rstrip("/")
-    if scheme == "https" and base.startswith("http://"):
+    host = (request.url.hostname or "").lower()
+    is_local = host in ("localhost", "127.0.0.1", "0.0.0.0", "") or host.startswith("192.168.")
+    if base.startswith("http://") and (scheme == "https" or not is_local):
         base = "https://" + base[len("http://"):]
     return base + "/auth/google/callback"
 
