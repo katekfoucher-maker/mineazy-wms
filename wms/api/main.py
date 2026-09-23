@@ -1,6 +1,7 @@
 """FastAPI application: web UI (server-rendered) + JSON API + Swagger."""
 from __future__ import annotations
 
+import pathlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -32,6 +33,10 @@ app.add_middleware(SessionMiddleware, secret_key=settings.secret_key,
 
 # generated charts / files, referenced by the reports page as /output/<name>
 app.mount("/output", StaticFiles(directory=str(settings.out)), name="output")
+
+# static assets (logo, etc.) bundled with the app, not generated at runtime
+_static_dir = pathlib.Path(__file__).resolve().parents[1] / "web" / "static"
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 @app.exception_handler(WMSError)

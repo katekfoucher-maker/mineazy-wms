@@ -130,6 +130,51 @@ def test_reject_deletes_a_pending_signup_only(web, db, monkeypatch):
     assert db.query(User).filter(User.username == "controller").first() is not None
 
 
+def test_email_signup_creates_a_pending_standard_user(web, db):
+    from wms.models import User
+
+    r = web.post("/signup", data={"full_name": "Jane Doe", "email": "jane@example.com",
+                                  "password": "supersecret1"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+
+    u = db.query(User).filter(User.email == "jane@example.com").first()
+    assert u is not None
+    assert u.role == "user" and u.is_approved is False and u.google_sub is None
+    assert u.password_hash is not None
+
+
+def test_email_signup_rejects_a_duplicate_email(web, db):
+    from wms.models import User
+
+    web.post("/signup", data={"full_name": "Jane Doe", "email": "dupe@example.com",
+                              "password": "supersecret1"})
+    r = web.post("/signup", data={"full_name": "Jane Two", "email": "dupe@example.com",
+                                  "password": "anotherpass1"})
+    assert r.status_code == 200 and "already exists" in r.text
+    assert db.query(User).filter(User.email == "dupe@example.com").count() == 1
+
+
+def test_email_signup_cannot_login_before_approval_then_can_after(web, db):
+    from wms.models import User
+
+    web.post("/signup", data={"full_name": "Pending Person", "email": "pending@example.com",
+                              "password": "supersecret1"})
+    r = web.post("/login", data={"username": "pending", "password": "supersecret1"},
+                 follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    r2 = web.get("/analysis", follow_redirects=False)
+    assert r2.status_code == 303 and r2.headers["location"] == "/login"
+
+    _login(web, "admin")
+    u = db.query(User).filter(User.email == "pending@example.com").first()
+    web.post(f"/users/{u.id}/approve", data={"role": "analyst"})
+    web.get("/logout")
+
+    r3 = web.post("/login", data={"username": "pending", "password": "supersecret1"},
+                  follow_redirects=False)
+    assert r3.status_code == 303 and r3.headers["location"] == "/"
+
+
 def test_users_page_is_admin_only(web):
     _login(web, "controller")
     r = web.get("/users", follow_redirects=False)

@@ -112,6 +112,9 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     if not u or not verify_password(password, u.password_hash):
         flash(request, "Invalid username or password.", "error")
         return RedirectResponse("/login", 303)
+    if not u.is_approved:
+        flash(request, "Your account is still awaiting administrator approval.", "error")
+        return RedirectResponse("/login", 303)
     request.session["uid"] = u.id
     nxt = request.session.pop("_next", "/")
     flash(request, f"Welcome, {u.full_name}.", "success")
@@ -163,8 +166,42 @@ def signup_form(request: Request, user=Depends(current_user)):
     from wms.web.deps import templates
     return templates.TemplateResponse("signup.html", {
         "request": request, "flashes": pop_flashes(request),
-        "google_configured": google_oauth.configured(),
+        "google_configured": google_oauth.configured(), "prefill": None,
     })
+
+
+@router.post("/signup")
+def signup_email(request: Request, full_name: str = Form(...), email: str = Form(...),
+                 password: str = Form(...), db: Session = Depends(db_session)):
+    from wms.security import hash_password
+    from wms.web.deps import templates
+
+    full_name, email = full_name.strip(), email.strip().lower()
+    prefill = {"full_name": full_name, "email": email}
+    err = None
+    if "@" not in email or "." not in email.split("@")[-1]:
+        err = "Enter a valid email address."
+    elif len(password) < 8:
+        err = "Password must be at least 8 characters."
+    elif db.query(User).filter(User.email == email).first():
+        err = "An account with that email already exists."
+    if err:
+        flash(request, err, "error")
+        return templates.TemplateResponse("signup.html", {
+            "request": request, "flashes": pop_flashes(request),
+            "google_configured": google_oauth.configured(), "prefill": prefill,
+        })
+
+    u = User(username=_unique_username(db, email.split("@")[0]),
+             full_name=full_name, email=email,
+             password_hash=hash_password(password), role="user",
+             is_active=True, is_approved=False)
+    db.add(u)
+    db.commit()
+    flash(request, f"Thanks, {full_name}! Your sign-up has been sent to the "
+                   f"administrator for approval - you'll be able to sign in once "
+                   f"it's approved.", "success")
+    return RedirectResponse("/login", 303)
 
 
 @router.get("/auth/google/start")
