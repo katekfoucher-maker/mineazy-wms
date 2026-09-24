@@ -297,6 +297,21 @@ def test_empty_dir_is_safe(tmp_path):
     assert r["coverage"]["series"] == 0
 
 
+def test_weekly_sales_series_profit_metric(tmp_path, monkeypatch):
+    _make_panel(tmp_path, n_weeks=12)
+    monkeypatch.setattr(wf, "weekly_dir", lambda: tmp_path)
+    wf._PANEL_CACHE.clear()
+
+    pan = wf.load_panel(str(tmp_path))
+    prof = wf.weekly_sales_series(metric="profit", panel=pan)
+    assert prof["metric"] == "profit"
+    assert prof["total"] == int(round(sum(
+        int(round(float(x))) for x in pan["PROFIT"].sum(axis=0))))
+    assert prof["svg"]["dots"] and prof["svg"]["dots"][0]["unit"] == "profit"
+    # a non-default (custom) panel keeps profit instead of forcing sales
+    assert wf.weekly_sales_series(metric="inventory", panel=pan)["metric"] == "sales"
+
+
 def test_weekly_sales_series(tmp_path, monkeypatch):
     _make_panel(tmp_path, n_weeks=12)
     monkeypatch.setattr(wf, "weekly_dir", lambda: tmp_path)

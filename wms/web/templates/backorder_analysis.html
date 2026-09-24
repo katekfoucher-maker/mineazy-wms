@@ -199,9 +199,8 @@
            autocomplete="off" onchange="this.form.requestSubmit()"></div>
   <div><label>View</label>
     <select name="fa_metric" onchange="this.form.requestSubmit()">
-      <option value="sales" {{ 'selected' if fa_metric != 'inventory' and fa_metric != 'both' }}>Sales</option>
-      <option value="inventory" {{ 'selected' if fa_metric == 'inventory' }}>Inventory (on hand)</option>
-      <option value="both" {{ 'selected' if fa_metric == 'both' }}>Sales + inventory</option>
+      <option value="sales" {{ 'selected' if fa_metric != 'profit' }}>Sales</option>
+      <option value="profit" {{ 'selected' if fa_metric == 'profit' }}>Profit</option>
     </select></div>
   <div style="min-width:0"><button type="submit">Show</button></div>
 </form>
@@ -210,7 +209,8 @@
 
 {% if sales_series and sales_series.has_data %}
 {% set g = sales_series.svg %}
-{% set _title = 'Monthly inventory' if fa_metric == 'inventory' else ('Monthly sales + inventory' if fa_metric == 'both' else 'Monthly sales') %}
+{% set _title = 'Monthly profit' if fa_metric == 'profit' else 'Monthly sales' %}
+{% set _unit = 'profit' if fa_metric == 'profit' else 'units' %}
 <div class="card" id="sales-chart-card">
   <div class="card-head">
     <h3>{{ _title }} ({{ sales_series.branch_label }}, {{ sales_series.sku_label }})</h3>
@@ -246,11 +246,11 @@
                   stroke-linejoin="round" stroke-linecap="round"/>
         {% for d in g.dots %}
           <circle cx="{{ d.x }}" cy="{{ d.y }}" r="3" fill="var(--brand)"
-                  data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="units">
-            <title>{{ d.label }}: {{ '{:,}'.format(d.value) }} units</title>
+                  data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="{{ _unit }}">
+            <title>{{ d.label }}: {{ '{:,}'.format(d.value) }} {{ _unit }}</title>
           </circle>
           <circle cx="{{ d.x }}" cy="{{ d.y }}" r="13" fill="transparent"
-                  data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="units"
+                  data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="{{ _unit }}"
                   style="cursor:pointer"></circle>
         {% endfor %}
       {% endif %}
@@ -260,24 +260,11 @@
     </svg>
   </div>
   <p class="muted sales-readout" style="margin:6px 0 0">
-    {% if fa_metric == 'both' %}
-      <span style="color:var(--brand)">&#9632;</span> sales &nbsp;
-      <span style="color:var(--ink)">&#9632;</span> on hand (dashed). Click a point for its month.
-    {% else %}
-      Click a point to see its month.
-    {% endif %}
-    {% if fa_metric == 'inventory' %}
-      {%- if sales_series.inv_available %}
-        Peak {{ '{:,}'.format(sales_series.inv_peak) }} on hand in a month over
-        {{ sales_series.n_weeks }} months{% if not sku %}, {{ sales_series.n_skus }} products{% endif %}.
-      {%- else %} No weekly stock readings available for the monthly view.{% endif %}
-    {% else %}
-      {{ '{:,}'.format(sales_series.total) }} units over {{ sales_series.n_weeks }} months,
-      peak {{ '{:,}'.format(sales_series.peak) }} in a month
-      {%- if not sku %}, {{ sales_series.n_skus }} products{% endif %}
-      {%- if fa_metric == 'both' and not sales_series.inv_available %}. No weekly stock readings available for the monthly view{% endif %}
-      {%- if sales_series.total == 0 %}. No recorded sales for this filter{% endif %}.
-    {% endif %}
+    Click a point to see its month.
+    {{ '{:,}'.format(sales_series.total) }} {{ _unit }} over {{ sales_series.n_weeks }} months,
+    peak {{ '{:,}'.format(sales_series.peak) }} in a month
+    {%- if not sku %}, {{ sales_series.n_skus }} products{% endif %}
+    {%- if sales_series.total == 0 %}. No recorded {{ 'profit' if fa_metric == 'profit' else 'sales' }} for this filter{% endif %}.
   </p>
 </div>
 {% endif %}

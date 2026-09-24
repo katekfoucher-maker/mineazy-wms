@@ -380,6 +380,9 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                         db: Session = Depends(db_session),
                         user: User = Depends(require_login)):
     branches = db.query(Branch).order_by(Branch.name).all()
+    # the monthly chart's View is Sales or Profit only (older links that ask
+    # for inventory fall back to Sales)
+    _fa_metric = "profit" if (fa_metric or "").strip().lower() == "profit" else "sales"
     bid = _bid(branch_id)
     bcode = ""
     if bid:
@@ -455,9 +458,9 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                   bmix_b2=bmix_b2.strip(), bmix_b3=bmix_b3.strip(),
                   forced_model=weekly_fc.forced_model(),
                   ckpt=weekly_fc.checkpoint_status(),
-                  fa_metric=(fa_metric or "sales").strip().lower(),
+                  fa_metric=_fa_metric,
                   sales_series=weekly_fc.weekly_sales_series(
-                      bcode=bcode, sku=sku, metric=fa_metric, panel=mp, period_fmt=mfmt),
+                      bcode=bcode, sku=sku, metric=_fa_metric, panel=mp, period_fmt=mfmt),
                   bmix_units=weekly_fc.branch_mix(metric="units", panel=mp, period_fmt=mfmt, **bmix_kw),
                   bmix_profit=weekly_fc.branch_mix(metric="profit", panel=mp, period_fmt=mfmt, **bmix_kw),
                   mix_units=weekly_fc.sales_mix(metric="units", panel=mp, period_fmt=mfmt, **pie_kw),

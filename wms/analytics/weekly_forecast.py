@@ -2119,8 +2119,10 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
                 every branch.
     ``sku``     restrict to a product (SKU exact, or name contains); blank = every
                 product, i.e. the branch's total.
-    ``metric``  ``sales`` (units sold, default), ``inventory`` (weekly on-hand
-                from the Hansa stock files) or ``both`` (overlay). Inventory is
+    ``metric``  ``sales`` (units sold, default), ``profit`` (the panel's PROFIT
+                matrix - works on any panel, weekly or monthly), ``inventory``
+                (weekly on-hand from the Hansa stock files) or ``both``
+                (overlay). Inventory is
                 only available where weekly stock files have been loaded, and
                 only when using the default weekly ``panel`` - a custom panel
                 (e.g. monthly) has no matching on-hand series, so it always
@@ -2148,10 +2150,16 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
     sel_periods = all_periods[lo:hi + 1]
     b, s = bcode.strip().lower(), sku.strip().lower()
     metric = (metric or "sales").strip().lower()
-    if metric not in ("sales", "inventory", "both"):
+    if metric not in ("sales", "profit", "inventory", "both"):
         metric = "sales"
-    if custom_panel and metric != "sales":
+    if custom_panel and metric not in ("sales", "profit"):
         metric = "sales"                      # no on-hand series for a non-default panel
+    if metric == "profit":
+        SERIES = pan.get("PROFIT")
+        if not getattr(SERIES, "size", 0):
+            SERIES = MAT
+    else:
+        SERIES = MAT
 
     match_bc = _bcode_matcher(b, keys)
     idx = []
@@ -2165,7 +2173,7 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
 
     n = len(sel_periods)
     have = bool(getattr(MAT, "size", 0)) and bool(idx) and n > 0
-    vals = ([int(round(float(x))) for x in MAT[idx][:, lo:hi + 1].sum(axis=0)]
+    vals = ([int(round(float(x))) for x in SERIES[idx][:, lo:hi + 1].sum(axis=0)]
             if have else [0] * n)
     peak, total = (max(vals) if vals else 0), int(sum(vals))
 
@@ -2193,7 +2201,7 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
     # left labels = the series shown on the left (sales, or on-hand when alone),
     # right labels = on-hand when both are shown.
     W, H, PT, PB = 960, 300, 14, 26
-    show_sales = metric in ("sales", "both")
+    show_sales = metric in ("sales", "profit", "both")
     show_inv = metric in ("inventory", "both") and inv_ok
     PL = 52
     PR = 52 if (show_sales and show_inv) else 14
@@ -2214,7 +2222,7 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
                 for j, (x, y) in enumerate(zip(xs, ys))]
         return {"line": line, "area": area, "dots": dots}
 
-    sales_svg = (_poly(vals, smax, "units") if show_sales
+    sales_svg = (_poly(vals, smax, "profit" if metric == "profit" else "units") if show_sales
                  else {"line": "", "area": "", "dots": []})
     inv_svg = (_poly(inv, imax, "on hand") if show_inv
                else {"line": "", "area": "", "dots": []})

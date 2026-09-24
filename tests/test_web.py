@@ -1249,3 +1249,15 @@ def test_receiving_order_feeds_the_split_tool(web, db):
         db.query(StockOnHand).filter(StockOnHand.branch_id == dc.id,
                                      StockOnHand.sku == sku).delete()
         db.commit()
+
+
+def test_flow_analysis_view_offers_only_sales_and_profit(web):
+    _login(web, "controller")
+    r = web.get("/analysis")
+    assert r.status_code == 200
+    sel = r.text.split('name="fa_metric"', 1)[1].split("</select>", 1)[0]
+    assert 'value="sales"' in sel and 'value="profit"' in sel
+    assert 'value="inventory"' not in sel and 'value="both"' not in sel
+    # an old inventory link falls back to Sales instead of erroring
+    assert web.get("/analysis?fa_metric=inventory").status_code == 200
+    assert web.get("/analysis?fa_metric=profit").status_code == 200
