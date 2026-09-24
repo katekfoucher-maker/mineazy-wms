@@ -47,7 +47,10 @@ _MAX_UNDER_BIAS = 12.0               # skip a model under-forecasting by more th
 _MAX_UPLIFT = 2.5
 # keep the forecast anchored to each SKU's own level, but ASYMMETRICALLY — a
 # prediction may run well above the level (safety) yet is held close underneath it
-_SPIKE_INFLUENCE = 0.5              # a bulk-order week above the robust cap counts only half
+_SPIKE_INFLUENCE = 0.75             # a bulk-order week above the robust cap counts 3/4 of its excess...
+_PEAK_CEIL = 3.0                    # ...but never more than this x the SKU's typical (median non-zero) sale
+_RECENT_MONTHS = 6                  # the most recent this-many months carry extra weight
+_RECENT_WEIGHT = 2.0                # ...each counting this x an older period
 _DEVIATION_BAND = 0.5              # legacy symmetric band (kept for callers that pass one number)
 _DOWN_BAND = 0.30                  # never forecast below (1-this) x the SKU's damped mean
 _UP_BAND = 2.00                    # may forecast up to (1+this) x the damped mean
@@ -692,18 +695,53 @@ def f_snaive(y, h, period=4):
     return np.clip(np.asarray([last[i % period] for i in range(h)]), 0, None)
 
 
+def recent_periods() -> int:
+    """How many of this panel's periods make up the "recent" window (the last
+    ``weekly_recent_months`` months): that many months on a monthly panel, the
+    equivalent number of weeks on a weekly one."""
+    cfg = get_settings()
+    months = int(getattr(cfg, "weekly_recent_months", _RECENT_MONTHS))
+    if getattr(cfg, "weekly_data_source", "monthly") == "monthly":
+        return max(1, months)
+    return max(1, int(round(months * 30.4 / 7)))
+
+
+def recency_weights(n: int) -> np.ndarray:
+    """Length-``n`` weights for a chronological series: the most recent
+    :func:`recent_periods` entries count ``weekly_recent_weight`` x an older one.
+    A series no longer than the recent window is weighted evenly."""
+    w = np.ones(max(0, int(n)))
+    rw = float(getattr(get_settings(), "weekly_recent_weight", _RECENT_WEIGHT))
+    if w.size and rw != 1.0:
+        w[-min(recent_periods(), w.size):] = rw
+    return w
+
+
 def _damped_mean(y, influence=_SPIKE_INFLUENCE):
-    """Mean of the series with bulk-order weeks pulled toward the body: any week
-    above ``median + 2*MAD`` contributes only ``influence`` of its excess."""
-    y = np.asarray(y, float)
-    y = y[y >= 0]
+    """Recency-weighted mean of the series with bulk-order weeks pulled toward
+    the body: any week above ``median + 2*MAD`` contributes ``influence`` of its
+    excess (a peak counts, but is bounded - never more than ``weekly_peak_ceil``
+    x the SKU's recent typical non-zero sale), and the most recent months weigh more
+    (see :func:`recency_weights`)."""
+    y0 = np.asarray(y, float)
+    keep = y0 >= 0
+    y = y0[keep]
     if not y.size or not y.any():
         return 0.0
     med = float(np.median(y))
     mad = float(np.median(np.abs(y - med)))
     cap = med + 2.0 * (mad if mad > 0 else max(med * 0.5, 1.0))
     dy = np.where(y > cap, cap + influence * (y - cap), y)
-    return float(dy.mean())
+    ceil = float(getattr(get_settings(), "weekly_peak_ceil", _PEAK_CEIL))
+    pos = y[y > 0]
+    if ceil > 0 and pos.size >= 3:
+        # "typical" is judged on the recent window when it has enough sales, so
+        # a genuine sustained step-up is not mistaken for a peak
+        tail = y[-min(recent_periods(), y.size):]
+        tpos = tail[tail > 0]
+        typ = float(np.median(tpos if tpos.size >= 3 else pos))
+        dy = np.minimum(dy, max(cap, ceil * typ))
+    return float(np.average(dy, weights=recency_weights(y0.size)[keep]))
 
 
 _RECENT_ANCHOR_WEEKS = 8

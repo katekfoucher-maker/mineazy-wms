@@ -1122,3 +1122,53 @@ def test_excess_stock_flags_deep_cover_and_dead_lines(db):
             seen_non_dead = True
         elif seen_non_dead:
             pytest.fail("a dead-stock row appeared after a non-dead excess row")
+
+
+def _monthly_source(monkeypatch):
+    monkeypatch.setattr(wf.get_settings(), "weekly_data_source", "monthly")
+
+
+def test_recent_window_is_six_months_in_either_cadence(monkeypatch):
+    _monthly_source(monkeypatch)
+    assert wf.recent_periods() == 6                     # 6 monthly periods
+    monkeypatch.setattr(wf.get_settings(), "weekly_data_source", "weekly")
+    assert wf.recent_periods() == 26                    # ~6 months of weeks
+
+
+def test_recency_weights_favour_the_last_six_months(monkeypatch):
+    _monthly_source(monkeypatch)
+    w = wf.recency_weights(10)
+    assert list(w) == [1.0] * 4 + [2.0] * 6
+    assert list(wf.recency_weights(4)) == [2.0] * 4      # all recent -> evenly weighted
+    assert wf.recency_weights(0).size == 0
+
+
+def test_damped_mean_leans_on_recent_months_and_bounds_peaks(monkeypatch):
+    _monthly_source(monkeypatch)
+    rising = [4] * 8 + [20] * 6                          # picked up in the last 6 months
+    assert wf._damped_mean(rising) > float(np.mean(rising))
+    falling = [20] * 8 + [4] * 6
+    assert wf._damped_mean(falling) < float(np.mean(falling))
+    assert wf._damped_mean([5] * 12) == 5.0              # flat stays flat
+
+    base = [10, 12, 9, 11, 10, 12, 9, 10, 11, 10, 12, 9]
+    peak = base[:-1] + [500]
+    monster = base[:-1] + [50000]
+    # a peak counts for something...
+    assert wf._damped_mean(peak) > wf._damped_mean(base)
+    # ...but is bounded against the product's own typical sale: 100x bigger
+    # peak does not move the level any further
+    assert wf._damped_mean(monster) == wf._damped_mean(peak)
+    assert wf._damped_mean(peak) < 3 * float(np.median(base)) * 1.01
+
+
+def test_tree_models_weight_recent_training_rows_more(monkeypatch):
+    _monthly_source(monkeypatch)
+    from wms.analytics import weekly_ml as ml
+    S, tr_end = 3, 20
+    w = ml._sample_weights(S, tr_end)
+    n = tr_end - ml._MINH
+    assert w.shape == (S * n,)
+    per_series = w[:n]
+    assert list(per_series[-6:]) == [2.0] * 6 and set(per_series[:-6]) == {1.0}
+    assert list(w[n:2 * n]) == list(per_series)          # same pattern per series

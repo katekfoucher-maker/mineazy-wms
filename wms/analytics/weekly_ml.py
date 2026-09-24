@@ -122,6 +122,15 @@ def _design(MAT, weeks, tr_end, keys, cats):
             b_of, c_of, months, _damped, _croston)
 
 
+def _sample_weights(S, tr_end):
+    """Per-row training weights in the same order as :func:`_design`'s rows
+    (series-major, weeks ``_MINH .. tr_end``): rows whose target falls in the
+    most recent months count ``weekly_recent_weight`` x an older row."""
+    from wms.analytics.weekly_forecast import recency_weights
+    n = max(0, tr_end - _MINH)
+    return np.tile(recency_weights(n), S).astype(np.float32)
+
+
 def _iterate(booster, predict, MAT, tr_end, h, b_of, c_of, months,
              _damped, _croston):
     """Roll a fitted 1-step booster forward h weeks, feeding predictions back."""
@@ -177,7 +186,9 @@ def gbm_forecast(MAT, weeks, tr_end, h, *, keys=None, cats=None,
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 booster = xgb.train(params, xgb.DMatrix(
-                    X, label=y, feature_names=_FEATS), num_boost_round=n_estimators)
+                    X, label=y, feature_names=_FEATS,
+                    weight=_sample_weights(S, tr_end)),
+                    num_boost_round=n_estimators)
             if model_out is not None:
                 try:
                     booster.save_model(model_out)
@@ -233,7 +244,8 @@ def lgbm_forecast(MAT, weeks, tr_end, h, *, keys=None, cats=None,
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 booster = lgb.train(params, lgb.Dataset(
-                    X, label=y, feature_name=list(_FEATS)),
+                    X, label=y, feature_name=list(_FEATS),
+                    weight=_sample_weights(S, tr_end)),
                     num_boost_round=n_estimators)
             if model_out is not None:
                 try:

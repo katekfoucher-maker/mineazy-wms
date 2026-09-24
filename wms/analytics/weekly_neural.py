@@ -60,18 +60,23 @@ def esrnn_forecast(MAT: np.ndarray, tr_end: int, h: int, *,
             return torch.stack(cols, 1).clamp(min=1e-3)
 
         starts = list(range(win - 1, T - h))
+        from wms.analytics.weekly_forecast import recency_weights
+        _rw = recency_weights(T)              # recent months count more
         for _ in range(epochs):
             opt.zero_grad()
             alpha = torch.sigmoid(a)
             lv = levels(alpha)
             loss = 0.0
+            wsum = 0.0
             for t in starts:
                 base = lv[:, t].unsqueeze(1)
                 xin = (Y[:, t - win + 1: t + 1] / base).log1p().unsqueeze(1)
                 tgt = Y[:, t + 1: t + 1 + h]
                 pred = net(xin).expm1() * base
-                loss = loss + (pred - tgt).abs().mean()
-            loss = loss / max(len(starts), 1)
+                tw = float(_rw[min(t + h, T - 1)])
+                loss = loss + tw * (pred - tgt).abs().mean()
+                wsum += tw
+            loss = loss / max(wsum, 1e-9)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(list(net.parameters()) + [a], 5.0)
             opt.step()
@@ -236,8 +241,13 @@ def esrnn_ratio_forecast(MAT: np.ndarray, tr_end: int, h: int, *, base=None,
         tr_starts = all_starts[:len(all_starts) - vw] if vw else all_starts
         va_starts = all_starts[len(all_starts) - vw:] if vw else []
 
+        # windows whose targets fall in the most recent months count more
+        from wms.analytics.weekly_forecast import recency_weights
+        _rw = recency_weights(T)
+
         def _loss(lv, starts):
             tot = 0.0
+            wsum = 0.0
             for t in starts:
                 base_lv = lv[:, t].unsqueeze(1)
                 seq = (Y[:, t - win + 1: t + 1] / base_lv).log1p().unsqueeze(-1)
@@ -247,8 +257,10 @@ def esrnn_ratio_forecast(MAT: np.ndarray, tr_end: int, h: int, *, base=None,
                 err = base_t * ratio(net(seq, feats)) - tgt
                 w = torch.where(err < 0, w_under, w_over) * \
                     torch.where(tgt > 0, w_pos, w_zero)
-                tot = tot + (w * err.abs() / mean.unsqueeze(1)).mean()
-            return tot / max(len(starts), 1)
+                tw = float(_rw[min(t + h, T - 1)])
+                tot = tot + tw * (w * err.abs() / mean.unsqueeze(1)).mean()
+                wsum += tw
+            return tot / max(wsum, 1e-9)
 
         best_val, best_state, bad = float("inf"), None, 0
         params = ([a] if warm else list(net.parameters()) + [a])

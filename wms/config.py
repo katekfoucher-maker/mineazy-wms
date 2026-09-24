@@ -58,10 +58,18 @@ class Settings(BaseSettings):
     # sales level; the min-units floor below then lifts the served total further
     # over. Negative = sit under before the floor (the floor does the lifting).
     weekly_safety_margin: float = 0.05
-    # A bulk-order week above the robust cap counts only this much toward the mean
-    # (0.5 = half). The forecast is then clamped ASYMMETRICALLY to that spike-
-    # damped mean: never below (1 - down_band), free up to (1 + up_band).
-    weekly_spike_influence: float = 0.5
+    # A bulk-order week above the robust cap counts this much of its excess
+    # toward the mean (0.75 = three quarters), but never more than
+    # weekly_peak_ceil x the product's typical (median non-zero) sale, so a peak
+    # is taken seriously without one outlier running away with the level. The
+    # forecast is then clamped ASYMMETRICALLY to that spike-damped mean: never
+    # below (1 - down_band), free up to (1 + up_band).
+    weekly_spike_influence: float = 0.75
+    weekly_peak_ceil: float = 3.0           # 0 = no ceiling
+    # The most recent months count this many times an older one in every level /
+    # feature / training weight (1 = no extra weight).
+    weekly_recent_months: int = 6
+    weekly_recent_weight: float = 2.0
     weekly_deviation_band: float = 0.5      # legacy symmetric band (unused by build)
     weekly_down_band: float = 0.30          # forecast held at >= 70% of the SKU level
     weekly_up_band: float = 2.00            # forecast allowed up to 300% of the SKU level
