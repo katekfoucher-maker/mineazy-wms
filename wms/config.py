@@ -96,6 +96,7 @@ class Settings(BaseSettings):
     # Lift stockout weeks to the in-stock level before training (fixes the
     # models' systematic under-prediction on products that keep running dry).
     weekly_unconstrain: bool = True
+    weekly_family_borrow: bool = True
     # When there is no inventory data for a (branch, SKU, week), still treat a
     # near-zero sales week as a stockout if the SKU normally sells most weeks and
     # that week is flanked by in-stock weeks.

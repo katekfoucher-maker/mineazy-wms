@@ -1284,6 +1284,21 @@ def build(directory=None, test_weeks: int = TEST_WEEKS) -> dict:
         "recent_sales": np.round(recent).astype(int),
     })
 
+    # a product that looks like it barely sells here (often just out of stock in
+    # some months) borrows a little from same-name siblings that sell steadily
+    # at the same branch - see product_family. Every consumer of `state`
+    # (allocation, splits, weekly orders, reorder points) sees the result.
+    state["weekly_demand_model"] = state["weekly_demand"]
+    state["family_borrowed"] = 0
+    if getattr(get_settings(), "weekly_family_borrow", True):
+        from wms.analytics import product_family as _pf
+        _new, _bor = _pf.borrow_from_siblings(
+            branch_of, state["item"].tolist(), state["weekly_demand"].to_numpy(),
+            MAT_raw, per_period_weeks=4.0 if _from_monthly else 1.0,
+            oos=umeta.get("oos"))
+        state["weekly_demand"] = _new
+        state["family_borrowed"] = _bor
+
     # per-SKU held-out forecast (fitted on training weeks) vs actuals — same
     # post-processing as the live forecast, on the TRAIN weeks only
     test_labels = list(weeks[tr_end:])
