@@ -126,6 +126,20 @@ def short_month(lab: str) -> str:
 
 
 _MATRIX_PANEL_CACHE: dict = {}
+_RAW_MATRIX_CACHE: dict = {}
+
+
+def cached_matrix_panel_raw() -> dict:
+    """The matrix panel exactly as recorded - every SKU code its own series, a
+    re-coded product's old and new codes separate. The forecast starts from
+    this (it joins re-codes itself, weighted by how much volume moved); every
+    other reader wants :func:`cached_matrix_panel`."""
+    sig = data_signature()
+    if _RAW_MATRIX_CACHE.get("sig") == sig:
+        return _RAW_MATRIX_CACHE["val"]
+    val = _build_matrix_panel(_load_panel_raw())
+    _RAW_MATRIX_CACHE["sig"], _RAW_MATRIX_CACHE["val"] = sig, val
+    return val
 
 
 def cached_matrix_panel() -> dict:
@@ -141,13 +155,17 @@ def cached_matrix_panel() -> dict:
     sig = data_signature()
     if _MATRIX_PANEL_CACHE.get("sig") == sig:
         return _MATRIX_PANEL_CACHE["val"]
-    val = _build_matrix_panel()
+    val = cached_matrix_panel_raw()
+    if _recode_join_enabled():
+        # a re-coded product's history continues under its live code, in full
+        from wms.analytics import sku_merge
+        val = sku_merge.merge_panel(val, scale=False)
     _MATRIX_PANEL_CACHE["sig"], _MATRIX_PANEL_CACHE["val"] = sig, val
     return val
 
 
-def _build_matrix_panel() -> dict:
-    panel = load_panel()
+def _build_matrix_panel(panel: pd.DataFrame | None = None) -> dict:
+    panel = _load_panel_raw() if panel is None else panel
     empty = {"MAT": np.zeros((0, 0), np.float32), "PROFIT": np.zeros((0, 0), np.float32),
              "REV": np.zeros((0, 0), np.float32), "keys": [], "weeks": [], "item_of": {}}
     if panel.empty:
@@ -459,8 +477,79 @@ def _load_panel_from_db() -> pd.DataFrame:
         db.close()
 
 
+def _recode_join_enabled() -> bool:
+    from wms.config import get_settings
+    return bool(getattr(get_settings(), "weekly_merge_recoded", True))
+
+
+_RECODE_MEMO: dict = {}
+
+
+def _recode_merges(df: pd.DataFrame) -> list:
+    """The re-code joins found in ``df`` (see :mod:`wms.analytics.sku_merge`),
+    remembered for the same data."""
+    key = (len(df), round(float(df["qty"].sum()), 2), str(df["period"].max()),
+           str(df["sku"].iloc[0]), str(df["sku"].iloc[-1]))
+    hit = _RECODE_MEMO.get(key)
+    if hit is None:
+        from wms.analytics import sku_merge
+        m = _build_matrix_panel(df)
+        hit = sku_merge.detect(m["keys"], m["item_of"], m["MAT"], m["REV"])
+        _RECODE_MEMO.clear()
+        _RECODE_MEMO[key] = hit
+    return hit
+
+
+def _relabel_recoded(df: pd.DataFrame) -> pd.DataFrame:
+    """Show a re-coded product's old sales rows under its live code (same
+    branch, same month, full quantities), with the live code's name, so the
+    sales data under the new code carries the product's whole history. Where
+    both codes sold in one month the two rows are added together."""
+    if df.empty or not _recode_join_enabled():
+        return df
+    merges = _recode_merges(df)
+    if not merges:
+        return df
+    to = {(m["branch"], m["old"]): m["new"] for m in merges}
+    idx = pd.MultiIndex.from_arrays([df["branch_code"], df["sku"]])
+    is_old = idx.isin(list(to))
+    if not is_old.any():
+        return df
+    live = idx.isin(list({(b, n) for (b, _o), n in to.items()}))
+    touched = is_old | live                       # only these rows can change or collide
+    sub = df[touched].copy()
+    names = (df[live].drop_duplicates(["branch_code", "sku"], keep="last")
+                     .set_index(["branch_code", "sku"])["item"].to_dict())
+    old_sub = is_old[touched]
+    keys = list(zip(sub["branch_code"], sub["sku"]))
+    new_sku = np.array([to.get(k, k[1]) for k in keys], dtype=object)
+    sub["sku"] = new_sku
+    sub.loc[old_sub, "item"] = [names.get((bc, s), it) for bc, s, it in
+                                zip(sub.loc[old_sub, "branch_code"], new_sku[old_sub],
+                                    sub.loc[old_sub, "item"])]
+    sub["category"] = sub["item"].map(categorise)
+    for c in ("qty", "turnover", "profit"):
+        sub[c] = pd.to_numeric(sub[c], errors="coerce")
+    g = sub.groupby(["branch_code", "branch", "sku", "item", "category", "period", "month_label"],
+                    dropna=False)
+    comb = pd.DataFrame({"qty": g["qty"].sum(), "turnover": g["turnover"].sum(),
+                         "profit": g["profit"].sum().where(g["profit"].count() > 0),
+                         "day_from": g["day_from"].min(), "day_to": g["day_to"].max()}).reset_index()
+    comb["gp_pct"] = np.where(comb["turnover"] > 0, 100.0 * comb["profit"] / comb["turnover"], np.nan)
+    comb["profit"] = comb["profit"].astype(object).where(comb["profit"].notna(), None)
+    out = pd.concat([df[~touched], comb[_PANEL_COLUMNS]], ignore_index=True)
+    return out.sort_values(["branch_code", "sku", "period"]).reset_index(drop=True)
+
+
 def load_panel(directory: str | os.PathLike | None = None) -> pd.DataFrame:
-    """Return one row per (branch, sku, month).
+    """:func:`_load_panel_raw` with re-coded products' old rows relabelled under
+    the live code (:func:`_relabel_recoded`) - what every reader of the sales
+    data sees. ``weekly_merge_recoded=False`` returns the data as recorded."""
+    return _relabel_recoded(_load_panel_raw(directory))
+
+
+def _load_panel_raw(directory: str | os.PathLike | None = None) -> pd.DataFrame:
+    """Return one row per (branch, sku, month), as recorded.
 
     Columns: branch_code, branch, sku, item, category, period (Timestamp,
     month-end), month_label, qty, turnover, profit, gp_pct, day_from, day_to.

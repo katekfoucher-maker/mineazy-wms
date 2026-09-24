@@ -355,7 +355,7 @@ def _load_panel_raw(directory=None) -> dict:
     """
     if not directory and getattr(get_settings(), "weekly_data_source", "monthly") == "monthly":
         from wms.analytics import monthly_sales as ms
-        return ms.cached_matrix_panel()
+        return ms.cached_matrix_panel_raw()       # the forecast joins re-codes itself (scaled)
     d = Path(directory) if directory else weekly_dir()
     files = [f for f in sorted(glob.glob(str(d / "**" / "*.xls*"), recursive=True))
              if not os.path.basename(f).startswith("~$")]

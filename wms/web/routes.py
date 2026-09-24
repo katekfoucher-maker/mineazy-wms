@@ -381,6 +381,12 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                         db: Session = Depends(db_session),
                         user: User = Depends(require_login)):
     branches = db.query(Branch).order_by(Branch.name).all()
+    # an old (replaced) product code typed in a filter finds the live product,
+    # whose sales history now carries the old code's rows too
+    _al = weekly_fc.sku_aliases()
+    _canon = lambda v: _al.get((v or "").strip().upper(), (v or "").strip())        # noqa: E731
+    sku, bmix_sku = _canon(sku), _canon(bmix_sku)
+    pie_p1, pie_p2, pie_p3 = _canon(pie_p1), _canon(pie_p2), _canon(pie_p3)
     # the monthly chart's View is Sales or Profit only (older links that ask
     # for inventory fall back to Sales)
     _fa_metric = "profit" if (fa_metric or "").strip().lower() == "profit" else "sales"
