@@ -31,6 +31,16 @@
  .back{display:block;margin-top:18px;font-size:12px;color:var(--muted);text-align:center;text-decoration:none}
  .back:hover{color:var(--ink)}
  .note{margin:16px 0 0;font-size:12px;color:var(--muted);line-height:1.5}
+ .pw{position:relative}
+ .pw input{padding-right:44px}
+ .pw .eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:34px;height:34px;
+          margin:0;padding:0;border:0;background:transparent;color:var(--muted);border-radius:8px;
+          cursor:pointer;display:flex;align-items:center;justify-content:center}
+ .pw .eye:hover{background:#f1f2f8;color:var(--ink)}
+ .pw .eye svg{width:20px;height:20px}
+ .pw .eye .off{display:none}
+ .pw .eye.on .off{display:block}
+ .pw .eye.on .show{display:none}
 </style></head><body>
 <div class="box">
   <img class="brand-banner" src="/static/img/logo.png" alt="Mineazy Mining Solutions">
@@ -53,7 +63,13 @@
     <label>Email address</label>
     <input name="email" type="email" value="{{ prefill.email if prefill else '' }}" autocomplete="email" required>
     <label>Password</label>
-    <input name="password" type="password" autocomplete="new-password" required minlength="8">
+    <div class="pw">
+      <input name="password" id="pw-input" type="password" autocomplete="new-password" required minlength="8">
+      <button type="button" class="eye" id="pw-eye" aria-label="Show password" aria-pressed="false" title="Show password">
+        <svg class="show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        <svg class="off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.9 10.9 0 0 1 12 19c-7 0-11-7-11-7a19.8 19.8 0 0 1 5.06-5.94M9.9 4.24A10.9 10.9 0 0 1 12 4c7 0 11 7 11 7a19.8 19.8 0 0 1-3.17 4.19M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="M1 1l22 22"/></svg>
+      </button>
+    </div>
     <button class="email-submit" type="submit">Sign up</button>
   </form>
 
@@ -64,4 +80,19 @@
   <a class="back" href="/login">Already have an account? Sign in</a>
   </div>
 </div>
+<script>
+(function(){
+  var inp = document.getElementById('pw-input'), eye = document.getElementById('pw-eye');
+  if (!inp || !eye) return;
+  eye.addEventListener('click', function(){
+    var show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    eye.classList.toggle('on', show);
+    eye.setAttribute('aria-pressed', show ? 'true' : 'false');
+    var t = show ? 'Hide password' : 'Show password';
+    eye.setAttribute('aria-label', t); eye.title = t;
+    inp.focus();
+  });
+})();
+</script>
 </body></html>

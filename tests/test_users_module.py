@@ -144,6 +144,11 @@ def test_login_password_field_has_a_show_hide_toggle(web):
     assert 'type="password"' in r.text
 
 
+def test_signup_password_field_has_a_show_hide_toggle(web):
+    r = web.get("/signup")
+    assert 'id="pw-eye"' in r.text and 'id="pw-input"' in r.text
+
+
 def test_google_start_from_login_returns_errors_to_login_not_signup(web, monkeypatch):
     from wms.services import google_oauth
     monkeypatch.setattr(google_oauth, "configured", lambda: True)
