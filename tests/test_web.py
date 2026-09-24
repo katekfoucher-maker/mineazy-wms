@@ -1271,3 +1271,13 @@ def test_flow_analysis_show_total_or_individual(web):
     assert 'value="total"' in sel and 'value="individual"' in sel
     assert web.get("/analysis?fa_show=individual").status_code == 200
     assert web.get("/analysis?fa_show=nonsense").status_code == 200
+
+
+def test_flow_analysis_monthly_chart_has_a_period_selector(web):
+    _login(web, "controller")
+    r = web.get("/analysis")
+    form = r.text.split('id="fa-filter"', 1)[1].split("</form>", 1)[0]
+    assert 'name="fa_weeks"' in form and 'name="fa_from"' in form and 'name="fa_to"' in form
+    for q in ("fa_weeks=3", "fa_weeks=3&fa_show=individual", "fa_weeks=nonsense",
+              "fa_weeks=custom&fa_from=2026-01-01&fa_to=2026-03-01"):
+        assert web.get("/analysis?" + q).status_code == 200, q

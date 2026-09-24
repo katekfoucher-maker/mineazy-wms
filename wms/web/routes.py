@@ -369,6 +369,7 @@ def backorders(request: Request, stage: str = "", branch_id: str = "",
 @router.get("/analysis")
 def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                         fa_metric: str = "sales", fa_show: str = "total",
+                        fa_weeks: str = "0", fa_from: str = "", fa_to: str = "",
                         bmix_sku: str = "", bmix_b1: str = "", bmix_b2: str = "",
                         bmix_b3: str = "", bmix_weeks: str = "0",
                         bmix_from: str = "", bmix_to: str = "",
@@ -384,6 +385,7 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
     # for inventory fall back to Sales)
     _fa_metric = "profit" if (fa_metric or "").strip().lower() == "profit" else "sales"
     _fa_show = "individual" if (fa_show or "").strip().lower() == "individual" else "total"
+    fa_w, fa_df, fa_dt = _resolve_period(fa_weeks, fa_from, fa_to)
     bid = _bid(branch_id)
     bcode = ""
     if bid:
@@ -460,8 +462,10 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                   forced_model=weekly_fc.forced_model(),
                   ckpt=weekly_fc.checkpoint_status(),
                   fa_metric=_fa_metric, fa_show=_fa_show,
+                  fa_weeks=fa_weeks.strip().lower(), fa_from=fa_from.strip(), fa_to=fa_to.strip(),
                   sales_series=weekly_fc.weekly_sales_series(
                       bcode=bcode, sku=sku, metric=_fa_metric, panel=mp, period_fmt=mfmt,
+                      weeks=fa_w, date_from=fa_df, date_to=fa_dt,
                       by_branch=(_fa_show == "individual")),
                   bmix_units=weekly_fc.branch_mix(metric="units", panel=mp, period_fmt=mfmt, **bmix_kw),
                   bmix_profit=weekly_fc.branch_mix(metric="profit", panel=mp, period_fmt=mfmt, **bmix_kw),

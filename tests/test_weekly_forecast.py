@@ -336,6 +336,21 @@ def test_weekly_sales_series_individual_branch_lines(tmp_path, monkeypatch):
     assert [sr["code"] for sr in one["svg"]["series"]] == ["BM"]
 
 
+def test_weekly_sales_series_period_window_applies_to_individual_lines(tmp_path, monkeypatch):
+    _make_panel(tmp_path, n_weeks=12)
+    monkeypatch.setattr(wf, "weekly_dir", lambda: tmp_path)
+    wf._PANEL_CACHE.clear()
+
+    full = wf.weekly_sales_series(by_branch=True)
+    last3 = wf.weekly_sales_series(by_branch=True, weeks=3)
+    assert last3["n_weeks"] == 3
+    assert all(len(sr["dots"]) == 3 for sr in last3["svg"]["series"])
+    # the window is the tail of the full history, per branch
+    for a, b in zip(full["svg"]["series"], last3["svg"]["series"]):
+        assert [d["value"] for d in a["dots"]][-3:] == [d["value"] for d in b["dots"]]
+    assert sum(sr["total"] for sr in last3["svg"]["series"]) == last3["total"]
+
+
 def test_weekly_sales_series(tmp_path, monkeypatch):
     _make_panel(tmp_path, n_weeks=12)
     monkeypatch.setattr(wf, "weekly_dir", lambda: tmp_path)
