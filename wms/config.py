@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     # models' systematic under-prediction on products that keep running dry).
     weekly_unconstrain: bool = True
     weekly_family_borrow: bool = True
+    # Monthly-sourced data is scored on its last 3 months (hold-out + the
+    # rolling-origin CV the offline trainer runs); weekly-sourced data keeps 1.
+    weekly_holdout_periods: int = 3
+    weekly_cv_origins: int = 3
     # When there is no inventory data for a (branch, SKU, week), still treat a
     # near-zero sales week as a stockout if the SKU normally sells most weeks and
     # that week is flanked by in-stock weeks.

@@ -695,6 +695,27 @@ def f_snaive(y, h, period=4):
     return np.clip(np.asarray([last[i % period] for i in range(h)]), 0, None)
 
 
+def holdout_periods() -> int:
+    """How many of the most recent periods are held out to score and pick the
+    model: ``weekly_holdout_periods`` (3 months) on the monthly panel, 1 on a
+    weekly one."""
+    cfg = get_settings()
+    if getattr(cfg, "weekly_data_source", "monthly") == "monthly":
+        return max(1, int(getattr(cfg, "weekly_holdout_periods", 3)))
+    return 1
+
+
+def cv_origins(quick: bool = False) -> int:
+    """Rolling-origin CV origins the offline trainer scores on: the last
+    ``weekly_cv_origins`` months on the monthly panel (4 on a weekly one)."""
+    if quick:
+        return 2
+    cfg = get_settings()
+    if getattr(cfg, "weekly_data_source", "monthly") == "monthly":
+        return max(1, int(getattr(cfg, "weekly_cv_origins", 3)))
+    return 4
+
+
 def recent_periods() -> int:
     """How many of this panel's periods make up the "recent" window (the last
     ``weekly_recent_months`` months): that many months on a monthly panel, the
@@ -1843,7 +1864,7 @@ def train_and_save(epochs: int = 400, val_weeks: int = 3, quick: bool = False) -
     # and predict week o, for the last K origins. Scored on what REALLY sold over
     # the in-stock weeks (same rule as build()). Averaged over origins this is a
     # far steadier read than a single last-week hold-out.
-    K = 2 if quick else 4
+    K = cv_origins(quick)
     P, A, I, origins = _rolling_origin_cv(pan, MAT, _umeta, state, _BLEND_POOL, K)
     scores = {m: _pool_score(P[m], A, I) for m in P}
 
@@ -2018,8 +2039,9 @@ def _cat_of(pan, k):
 
 
 def cached_run() -> dict:
-    """One hold-out — the last week — trained on every earlier week. That is what
-    the model comparison and the live forecast use."""
+    """One hold-out (the last :func:`holdout_periods` periods - 3 months on the
+    monthly panel, 1 week on a weekly one), trained on every earlier period. That
+    is what the model comparison and the live forecast use."""
     d = weekly_dir()
     try:
         files = tuple(sorted((os.path.basename(p), os.path.getmtime(p))
@@ -2034,9 +2056,10 @@ def cached_run() -> dict:
     with _CACHE_LOCK:
         if _CACHE.get("val") is not None and _CACHE.get("sig") == sig:
             return _CACHE["val"]
-        primary = dict(build(test_weeks=1))
-        primary["iteration"] = "1-week"
-        primary["runs"] = {1: primary}
+        n_hold = holdout_periods()
+        primary = dict(build(test_weeks=n_hold))
+        primary["iteration"] = "1-week" if n_hold == 1 else f"{n_hold}-period"
+        primary["runs"] = {n_hold: primary}
         _CACHE["val"] = primary          # set val BEFORE sig so a reader never
         _CACHE["sig"] = sig              # sees a matching sig without a value
         return primary

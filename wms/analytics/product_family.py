@@ -40,6 +40,7 @@ RECENT_PERIODS = 6        # "sold recently" = a sale in the last this-many perio
                           # forecast's own "dead" rule is 6 periods of nothing)
 FRESH_PERIODS = 3         # ...and a sale inside this many is "fresh" (full pull);
 STALE_FACTOR = 0.5        # older than that, the pull is only this share as strong
+MAX_LIFT = None           # optional cap: never more than this x the product's own rate
 
 
 def family_stem(name) -> str | None:
@@ -56,8 +57,10 @@ def family_stem(name) -> str | None:
 
 
 def borrow_from_siblings(branch_of, items, weekly_demand, MAT_raw,
-                         per_period_weeks: float = 1.0, oos=None):
-    """-> ``(new_weekly_demand, borrowed)``, both int arrays like the input.
+                         per_period_weeks: float = 1.0, oos=None,
+                         integers: bool = True):
+    """-> ``(new_weekly_demand, borrowed)``, both int arrays like the input
+    (``integers=False`` keeps unrounded floats, for measuring the rule itself).
 
     ``weekly_demand`` is the model's weekly rate per series; ``MAT_raw`` the
     (series x period) matrix of what actually sold; ``per_period_weeks`` how
@@ -66,8 +69,8 @@ def borrow_from_siblings(branch_of, items, weekly_demand, MAT_raw,
     against a product's sales density)."""
     wd = np.asarray(weekly_demand, float)
     S = len(wd)
-    new = np.round(wd).astype(int)
-    borrowed = np.zeros(S, int)
+    new = np.round(wd).astype(int) if integers else wd.copy()
+    borrowed = np.zeros(S, int if integers else float)
     MAT = np.asarray(MAT_raw, float)
     if S == 0 or MAT.ndim != 2 or MAT.shape[0] != S or MAT.shape[1] == 0:
         return new, borrowed
@@ -116,7 +119,9 @@ def borrow_from_siblings(branch_of, items, weekly_demand, MAT_raw,
             pull = MAX_BORROW * gap * (1.0 if fresh[i] else STALE_FACTOR)
             target = wd[i] + pull * (sib_level - wd[i])
             target = min(target, max(wd[i], CAP_MULT * peak_wk[i]))
-            out = int(np.ceil(target))
+            if MAX_LIFT:
+                target = min(target, MAX_LIFT * max(wd[i], 0.25))
+            out = int(np.ceil(target)) if integers else float(target)
             if out > new[i]:
                 borrowed[i] = out - new[i]
                 new[i] = out
