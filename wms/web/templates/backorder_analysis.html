@@ -202,6 +202,11 @@
       <option value="sales" {{ 'selected' if fa_metric != 'profit' }}>Sales</option>
       <option value="profit" {{ 'selected' if fa_metric == 'profit' }}>Profit</option>
     </select></div>
+  <div><label>Show</label>
+    <select name="fa_show" onchange="this.form.requestSubmit()">
+      <option value="total" {{ 'selected' if fa_show != 'individual' }}>Total</option>
+      <option value="individual" {{ 'selected' if fa_show == 'individual' }}>Individual</option>
+    </select></div>
   <div style="min-width:0"><button type="submit">Show</button></div>
 </form>
 
@@ -209,7 +214,7 @@
 
 {% if sales_series and sales_series.has_data %}
 {% set g = sales_series.svg %}
-{% set _title = 'Monthly profit' if fa_metric == 'profit' else 'Monthly sales' %}
+{% set _title = ('Monthly profit' if fa_metric == 'profit' else 'Monthly sales') ~ (' by branch' if g.series else '') %}
 {% set _unit = 'profit' if fa_metric == 'profit' else 'units' %}
 <div class="card" id="sales-chart-card">
   <div class="card-head">
@@ -240,7 +245,20 @@
                   style="cursor:pointer"></circle>
         {% endfor %}
       {% endif %}
-      {% if g.show_sales %}
+      {% for sr in g.series %}
+        <polyline points="{{ sr.line }}" fill="none" stroke="{{ sr.color }}" stroke-width="2"
+                  stroke-linejoin="round" stroke-linecap="round"/>
+        {% for d in sr.dots %}
+          <circle cx="{{ d.x }}" cy="{{ d.y }}" r="3" fill="{{ sr.color }}"
+                  data-series="{{ sr.name }}" data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="{{ _unit }}">
+            <title>{{ sr.name }} - {{ d.label }}: {{ '{:,}'.format(d.value) }} {{ _unit }}</title>
+          </circle>
+          <circle cx="{{ d.x }}" cy="{{ d.y }}" r="11" fill="transparent"
+                  data-series="{{ sr.name }}" data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="{{ _unit }}"
+                  style="cursor:pointer"></circle>
+        {% endfor %}
+      {% endfor %}
+      {% if g.show_sales and not g.series %}
         {% if g.area %}<path d="{{ g.area }}" fill="var(--brand-soft)"/>{% endif %}
         <polyline points="{{ g.line }}" fill="none" stroke="var(--brand)" stroke-width="2"
                   stroke-linejoin="round" stroke-linecap="round"/>
@@ -259,6 +277,13 @@
       {% endfor %}
     </svg>
   </div>
+  {% if g.series %}
+  <p class="mini" style="margin:8px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px">
+    {% for sr in g.series %}
+      <span><span style="color:{{ sr.color }}">&#9632;</span> {{ sr.name }}</span>
+    {% endfor %}
+  </p>
+  {% endif %}
   <p class="muted sales-readout" style="margin:6px 0 0">
     Click a point to see its month.
     {{ '{:,}'.format(sales_series.total) }} {{ _unit }} over {{ sales_series.n_weeks }} months,
@@ -654,7 +679,8 @@ var BRANCH_ID_BY_CODE = { {% for b in branches %}"{{ b.code|upper }}": {{ b.id }
     var card = hit.closest('.card');
     var out  = card && card.querySelector('.sales-readout');
     var unit = hit.getAttribute('data-unit') || 'units';
-    if (out) out.textContent = hit.getAttribute('data-week') + ': '
+    var ser = hit.getAttribute('data-series');
+    if (out) out.textContent = (ser ? ser + ' - ' : '') + hit.getAttribute('data-week') + ': '
       + Number(hit.getAttribute('data-value')).toLocaleString() + ' ' + unit;
     hit.closest('svg').querySelectorAll('circle[data-week][fill]').forEach(function(c){
       c.setAttribute('r', c === hit ? '5.5' : '3');

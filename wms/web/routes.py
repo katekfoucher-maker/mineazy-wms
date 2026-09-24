@@ -368,7 +368,7 @@ def backorders(request: Request, stage: str = "", branch_id: str = "",
 
 @router.get("/analysis")
 def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
-                        fa_metric: str = "sales",
+                        fa_metric: str = "sales", fa_show: str = "total",
                         bmix_sku: str = "", bmix_b1: str = "", bmix_b2: str = "",
                         bmix_b3: str = "", bmix_weeks: str = "0",
                         bmix_from: str = "", bmix_to: str = "",
@@ -383,6 +383,7 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
     # the monthly chart's View is Sales or Profit only (older links that ask
     # for inventory fall back to Sales)
     _fa_metric = "profit" if (fa_metric or "").strip().lower() == "profit" else "sales"
+    _fa_show = "individual" if (fa_show or "").strip().lower() == "individual" else "total"
     bid = _bid(branch_id)
     bcode = ""
     if bid:
@@ -458,9 +459,10 @@ def backorders_analysis(request: Request, branch_id: str = "", sku: str = "",
                   bmix_b2=bmix_b2.strip(), bmix_b3=bmix_b3.strip(),
                   forced_model=weekly_fc.forced_model(),
                   ckpt=weekly_fc.checkpoint_status(),
-                  fa_metric=_fa_metric,
+                  fa_metric=_fa_metric, fa_show=_fa_show,
                   sales_series=weekly_fc.weekly_sales_series(
-                      bcode=bcode, sku=sku, metric=_fa_metric, panel=mp, period_fmt=mfmt),
+                      bcode=bcode, sku=sku, metric=_fa_metric, panel=mp, period_fmt=mfmt,
+                      by_branch=(_fa_show == "individual")),
                   bmix_units=weekly_fc.branch_mix(metric="units", panel=mp, period_fmt=mfmt, **bmix_kw),
                   bmix_profit=weekly_fc.branch_mix(metric="profit", panel=mp, period_fmt=mfmt, **bmix_kw),
                   mix_units=weekly_fc.sales_mix(metric="units", panel=mp, period_fmt=mfmt, **pie_kw),

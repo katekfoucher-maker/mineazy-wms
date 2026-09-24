@@ -1261,3 +1261,13 @@ def test_flow_analysis_view_offers_only_sales_and_profit(web):
     # an old inventory link falls back to Sales instead of erroring
     assert web.get("/analysis?fa_metric=inventory").status_code == 200
     assert web.get("/analysis?fa_metric=profit").status_code == 200
+
+
+def test_flow_analysis_show_total_or_individual(web):
+    _login(web, "controller")
+    r = web.get("/analysis")
+    assert r.status_code == 200
+    sel = r.text.split('name="fa_show"', 1)[1].split("</select>", 1)[0]
+    assert 'value="total"' in sel and 'value="individual"' in sel
+    assert web.get("/analysis?fa_show=individual").status_code == 200
+    assert web.get("/analysis?fa_show=nonsense").status_code == 200

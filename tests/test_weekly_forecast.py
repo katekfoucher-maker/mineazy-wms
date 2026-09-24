@@ -312,6 +312,30 @@ def test_weekly_sales_series_profit_metric(tmp_path, monkeypatch):
     assert wf.weekly_sales_series(metric="inventory", panel=pan)["metric"] == "sales"
 
 
+def test_weekly_sales_series_individual_branch_lines(tmp_path, monkeypatch):
+    _make_panel(tmp_path, n_weeks=12)
+    monkeypatch.setattr(wf, "weekly_dir", lambda: tmp_path)
+    wf._PANEL_CACHE.clear()
+
+    total = wf.weekly_sales_series()
+    assert total["svg"]["series"] == []
+
+    ind = wf.weekly_sales_series(by_branch=True)
+    series = ind["svg"]["series"]
+    assert len(series) >= 2
+    # one line per branch, each with a point per period, and together they
+    # add back up to the summed total the Total view plots
+    assert all(len(sr["dots"]) == 12 and sr["line"] for sr in series)
+    assert sum(sr["total"] for sr in series) == total["total"] == ind["total"]
+    assert len({sr["color"] for sr in series}) == len(series)
+    # one shared y-scale: no branch's own peak exceeds the axis maximum
+    top = max(d["value"] for sr in series for d in sr["dots"])
+    assert ind["svg"]["grid"][0]["label"] == f"{top:,}"
+    # a single-branch filter leaves just that branch's line
+    one = wf.weekly_sales_series(bcode="BM", by_branch=True)
+    assert [sr["code"] for sr in one["svg"]["series"]] == ["BM"]
+
+
 def test_weekly_sales_series(tmp_path, monkeypatch):
     _make_panel(tmp_path, n_weeks=12)
     monkeypatch.setattr(wf, "weekly_dir", lambda: tmp_path)

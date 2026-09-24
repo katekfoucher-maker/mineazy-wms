@@ -2112,7 +2112,8 @@ def sales_products(panel: dict | None = None) -> list[dict]:
 
 def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
                         panel: dict | None = None, period_fmt=None,
-                        weeks: int = 0, date_from: str = "", date_to: str = "") -> dict:
+                        weeks: int = 0, date_from: str = "", date_to: str = "",
+                        by_branch: bool = False) -> dict:
     """Time series for the Flow Analysis plot (weekly by default).
 
     ``bcode``   restrict to a branch (code ``BM`` or display-name prefix); blank =
@@ -2127,6 +2128,9 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
                 only when using the default weekly ``panel`` - a custom panel
                 (e.g. monthly) has no matching on-hand series, so it always
                 shows as "sales".
+    ``by_branch`` (sales / profit only) also returns one line per branch in
+                ``svg["series"]``, all on one shared y-scale, instead of the
+                single summed line; ``values``/``total``/``peak`` stay the sum.
     ``panel``   overrides the default weekly :func:`cached_panel`.
     ``period_fmt`` overrides the default weekly period-label formatter
                 (``_short_week``) - pass ``monthly_sales.short_month`` when
@@ -2209,6 +2213,17 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
     base = PT + ih
     smax = peak or 1
     imax = inv_peak or 1
+
+    branch_vals: dict = {}
+    if by_branch and have and metric in ("sales", "profit"):
+        per_branch: dict = {}
+        for i in idx:
+            per_branch.setdefault(keys[i][0], []).append(i)
+        for bc, ii in per_branch.items():
+            branch_vals[bc] = [int(round(float(x)))
+                               for x in SERIES[ii][:, lo:hi + 1].sum(axis=0)]
+        # every line shares one y-scale, so the biggest single branch sets it
+        smax = max((max(v) for v in branch_vals.values()), default=0) or 1
     xs = [PL + (0.0 if n <= 1 else j / (n - 1) * iw) for j in range(n)]
 
     def _poly(series, mx, unit):
@@ -2226,6 +2241,20 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
                  else {"line": "", "area": "", "dots": []})
     inv_svg = (_poly(inv, imax, "on hand") if show_inv
                else {"line": "", "area": "", "dots": []})
+    series_out = []
+    if branch_vals:
+        order = sorted(branch_vals, key=lambda c: (-sum(branch_vals[c]), c))
+        cols = _assign_colours(order)
+        unit = "profit" if metric == "profit" else "units"
+        for bc in order:
+            poly = _poly(branch_vals[bc], smax, unit)
+            name = BRANCH_NAME.get(bc, bc)
+            for d in poly["dots"]:
+                d["series"] = name
+            series_out.append({"code": bc, "name": name, "color": cols[bc],
+                               "total": sum(branch_vals[bc]),
+                               "line": poly["line"], "dots": poly["dots"]})
+        sales_svg = {"line": "", "area": "", "dots": []}
     left_max = smax if show_sales else imax
     grid = [{"y": round(PT + f * ih, 1),
              "label": f"{int(round(left_max * (1 - f))):,}",
@@ -2247,6 +2276,7 @@ def weekly_sales_series(bcode: str = "", sku: str = "", metric: str = "sales",
                 "x0": PL, "x1": PL + iw, "y0": PT, "y1": base,
                 "dual": bool(show_sales and show_inv),
                 "show_sales": show_sales, "show_inv": show_inv,
+                "series": series_out,
                 "line": sales_svg["line"], "area": sales_svg["area"],
                 "dots": sales_svg["dots"],
                 "inv_line": inv_svg["line"], "inv_area": inv_svg["area"],
