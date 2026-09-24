@@ -248,10 +248,10 @@
         {% endfor %}
       {% endif %}
       {% for sr in g.series %}
-        <polyline points="{{ sr.line }}" fill="none" stroke="{{ sr.color }}" stroke-width="2"
+        <polyline points="{{ sr.line }}" fill="none" stroke="{{ sr.color }}" stroke-width="1.2"
                   stroke-linejoin="round" stroke-linecap="round"/>
         {% for d in sr.dots %}
-          <circle cx="{{ d.x }}" cy="{{ d.y }}" r="3" fill="{{ sr.color }}"
+          <circle cx="{{ d.x }}" cy="{{ d.y }}" r="2" fill="{{ sr.color }}" data-r="2"
                   data-series="{{ sr.name }}" data-week="{{ d.label }}" data-value="{{ d.value }}" data-unit="{{ _unit }}">
             <title>{{ sr.name }} - {{ d.label }}: {{ '{:,}'.format(d.value) }} {{ _unit }}</title>
           </circle>
@@ -685,7 +685,7 @@ var BRANCH_ID_BY_CODE = { {% for b in branches %}"{{ b.code|upper }}": {{ b.id }
     if (out) out.textContent = (ser ? ser + ' - ' : '') + hit.getAttribute('data-week') + ': '
       + Number(hit.getAttribute('data-value')).toLocaleString() + ' ' + unit;
     hit.closest('svg').querySelectorAll('circle[data-week][fill]').forEach(function(c){
-      c.setAttribute('r', c === hit ? '5.5' : '3');
+      c.setAttribute('r', c === hit ? '5.5' : (c.getAttribute('data-r') || '3'));
     });
   });
 
