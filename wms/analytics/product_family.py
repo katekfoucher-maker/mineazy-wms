@@ -31,7 +31,7 @@ _SPEC_WORDS = {
     "ORANGE", "BROWN", "SMALL", "MEDIUM", "LARGE",
 }
 
-MAX_BORROW = 0.6          # at most this share of the gap to the siblings is closed
+MAX_BORROW = 0.2          # at most this share of the gap to the siblings is closed (config: weekly_family_borrow_share)
 CAP_MULT = 1.0            # never above what the product has ever sold in one period there
 MIN_SIBLINGS = 2          # reliable siblings needed at the same branch
 SIB_MIN_DENSITY = 0.6     # a sibling must have sold in at least this share of its periods
@@ -58,7 +58,7 @@ def family_stem(name) -> str | None:
 
 def borrow_from_siblings(branch_of, items, weekly_demand, MAT_raw,
                          per_period_weeks: float = 1.0, oos=None,
-                         integers: bool = True):
+                         integers: bool = True, max_borrow: float | None = None):
     """-> ``(new_weekly_demand, borrowed)``, both int arrays like the input
     (``integers=False`` keeps unrounded floats, for measuring the rule itself).
 
@@ -67,6 +67,7 @@ def borrow_from_siblings(branch_of, items, weekly_demand, MAT_raw,
     many weeks one period spans (4 for monthly data, 1 for weekly); ``oos`` an
     optional bool matrix of periods known to be out of stock (they don't count
     against a product's sales density)."""
+    share = MAX_BORROW if max_borrow is None else float(max_borrow)
     wd = np.asarray(weekly_demand, float)
     S = len(wd)
     new = np.round(wd).astype(int) if integers else wd.copy()
@@ -116,7 +117,7 @@ def borrow_from_siblings(branch_of, items, weekly_demand, MAT_raw,
             gap = min(1.0, max(0.0, 1.0 - density[i] / sib_density))
             if gap <= 0:
                 continue
-            pull = MAX_BORROW * gap * (1.0 if fresh[i] else STALE_FACTOR)
+            pull = share * gap * (1.0 if fresh[i] else STALE_FACTOR)
             target = wd[i] + pull * (sib_level - wd[i])
             target = min(target, max(wd[i], CAP_MULT * peak_wk[i]))
             if MAX_LIFT:

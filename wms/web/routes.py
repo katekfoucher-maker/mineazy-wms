@@ -1197,6 +1197,9 @@ def _run_weekly_split(db, pairs, branch_files) -> dict:
         getattr(get_settings(), "dispatch_transit_days", 3)
 
     st = weekly_fc.cached_run().get("state")
+    # a re-coded product's history lives under its live code: read any old code
+    # in the request / stock lists as that
+    alias = weekly_fc.sku_aliases()
     name_by_code = {b.code.upper(): b.name for b in db.query(Branch).all()}
     fc, item_by_sku = {}, {}
     if st is not None and not st.empty:
@@ -1226,6 +1229,7 @@ def _run_weekly_split(db, pairs, branch_files) -> dict:
             q = ln.get("requested_qty")
             if not sk or q in (None, ""):
                 continue
+            sk = alias.get(sk, sk)
             req.setdefault(sk, {})
             key = bcu or "?"
             req[sk][key] = req[sk].get(key, 0) + int(q)
@@ -1234,7 +1238,7 @@ def _run_weekly_split(db, pairs, branch_files) -> dict:
     rows = []
     for sk, qv in pairs:
         sk = str(sk or "").strip()
-        sk_u = sk.upper()
+        sk_u = alias.get(sk.upper(), sk.upper())
         try:
             qv = int(float(qv))
         except (TypeError, ValueError):
@@ -1291,9 +1295,10 @@ def _run_weekly_split(db, pairs, branch_files) -> dict:
         d = parsed.get("doc_date") if isinstance(parsed, dict) else None
         dn_lines = []
         for ln in pd_lines:
-            sk_u = str(ln.get("sku") or "").strip().upper()
-            if not sk_u:
+            sk_raw = str(ln.get("sku") or "").strip().upper()
+            if not sk_raw:
                 continue
+            sk_u = alias.get(sk_raw, sk_raw)
             rq = int(ln.get("requested_qty") or 0)
             dn_lines.append({
                 "sku": ln.get("sku"),

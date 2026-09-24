@@ -87,3 +87,19 @@ def test_a_product_not_seen_lately_borrows_less_than_a_fresh_one():
     a, _ = _run(items, [22, 22, 24, 4], [STEADY, STEADY, STEADY, fresh_gappy])
     b, _ = _run(items, [22, 22, 24, 4], [STEADY, STEADY, STEADY, stale_gappy])
     assert 4 < b[3] < a[3]
+
+
+def test_the_borrow_share_is_20_percent_by_default_and_adjustable():
+    assert pf.MAX_BORROW == 0.2
+    from wms.config import get_settings
+    assert get_settings().weekly_family_borrow_share == 0.2
+    items = [NAME.format(i) for i in range(1, 5)]
+    mats = [STEADY, STEADY, STEADY, GAPPY]
+    kw = dict(branch_of=["BM"] * 4, items=items, weekly_demand=[22, 22, 24, 4],
+              MAT_raw=_panel(mats), per_period_weeks=4.0, integers=False)
+    gentle = pf.borrow_from_siblings(**kw)[0][3]
+    strong = pf.borrow_from_siblings(**kw, max_borrow=0.6)[0][3]
+    assert 4 < gentle < strong
+    # 20% of the way at most: never more than a fifth of the gap to the siblings
+    assert gentle - 4 <= 0.2 * (22 - 4) + 1e-9
+

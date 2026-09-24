@@ -303,7 +303,40 @@ def _load_panel_from_db() -> dict:
     return _reshape([long], provs)
 
 
+_MERGE_CACHE: dict = {}
+
+
 def load_panel(directory=None) -> dict:
+    """The sales panel every forecast is built from, with re-coded products'
+    histories joined (:mod:`wms.analytics.sku_merge`; ``weekly_merge_recoded``).
+    ``pan["merges"]`` lists what was joined. The underlying (possibly shared and
+    cached) panel is never modified."""
+    pan = _load_panel_raw(directory)
+    if not getattr(get_settings(), "weekly_merge_recoded", True):
+        return {**pan, "merges": []}
+    hit = _MERGE_CACHE.get("k")
+    if hit is not None and hit[0] is pan:
+        return hit[1]
+    from wms.analytics import sku_merge as _sm
+    merged = _sm.merge_panel(pan, scale=bool(getattr(get_settings(), "weekly_merge_scale", True)))
+    _MERGE_CACHE["k"] = (pan, merged)
+    return merged
+
+
+def sku_merges() -> list:
+    """The re-code joins applied to the forecast panel:
+    ``[{"branch", "old", "new", "name", "basis"}, ...]``."""
+    return list(cached_panel().get("merges") or [])
+
+
+def sku_aliases() -> dict:
+    """``{OLD_SKU: NEW_SKU}`` for re-coded products, so a request or a typed SKU
+    under the old code is read as the live one."""
+    from wms.analytics import sku_merge as _sm
+    return _sm.aliases(sku_merges())
+
+
+def _load_panel_raw(directory=None) -> dict:
     """Read uploaded Excel files under ``directory`` (or the configured
     ``weekly_sales_dir`` when ``weekly_data_source == "weekly"``) when there
     are any there - the on-disk path this always used to take, still used by
@@ -1354,7 +1387,8 @@ def build(directory=None, test_weeks: int = TEST_WEEKS) -> dict:
         _new, _bor = _pf.borrow_from_siblings(
             branch_of, state["item"].tolist(), state["weekly_demand"].to_numpy(),
             MAT_raw, per_period_weeks=4.0 if _from_monthly else 1.0,
-            oos=umeta.get("oos"))
+            oos=umeta.get("oos"),
+            max_borrow=float(getattr(get_settings(), "weekly_family_borrow_share", 0.2)))
         state["weekly_demand"] = _new
         state["family_borrowed"] = _bor
 
@@ -1406,6 +1440,7 @@ def build(directory=None, test_weeks: int = TEST_WEEKS) -> dict:
         "inventory_used": bool(umeta.get("inventory", False)),
         "inv_readings": int(umeta.get("inv_readings", 0)),
         "censored_holdout": int((~ins_te).sum()),
+        "merged_series": len(pan.get("merges") or []),
     }
     return {"state": state, "overall": overall, "by_segment": by_seg,
             "champ": champ, "best_method": best_method,

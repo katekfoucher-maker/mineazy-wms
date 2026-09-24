@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     # models' systematic under-prediction on products that keep running dry).
     weekly_unconstrain: bool = True
     weekly_family_borrow: bool = True
+    weekly_family_borrow_share: float = 0.2     # share of the gap to sibling products closed (max)
+    # Join the sales history of a re-coded product (old SKU stops as the new one
+    # starts, identical name) into the live code before forecasting.
+    weekly_merge_recoded: bool = True
+    weekly_merge_scale: bool = True             # add the old history at the share the new code has taken over
     # Monthly-sourced data is scored on its last 3 months (hold-out + the
     # rolling-origin CV the offline trainer runs); weekly-sourced data keeps 1.
     weekly_holdout_periods: int = 3

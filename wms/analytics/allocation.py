@@ -244,6 +244,13 @@ def allocate_by_forecast(db: Session, *, sku, qty: int,
     qty = max(0, int(qty or 0))
     st = wfc.cached_run()["state"]
     rows_fc = st[st["sku"].str.lower() == sku_code.lower()] if not st.empty else st
+    # a code that was replaced by a newer one carries no forecast of its own -
+    # read it as the live code (see wms.analytics.sku_merge)
+    if (rows_fc is None or rows_fc.empty) and not st.empty:
+        _live = wfc.sku_aliases().get(sku_code.upper())
+        if _live:
+            sku_code = _live
+            rows_fc = st[st["sku"].str.lower() == _live.lower()]
     # not a SKU? the user may have typed a product name - resolve it against the
     # weekly forecast (exact name first, then a unique substring match)
     if (rows_fc is None or rows_fc.empty) and not st.empty and ref:
