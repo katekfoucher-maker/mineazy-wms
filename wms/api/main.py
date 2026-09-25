@@ -5,7 +5,7 @@ import pathlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -52,6 +52,13 @@ async def _redirect(_: Request, exc: Redirect):
 # JSON API
 for r in (backorders.router, analytics.router, reports.router):
     app.include_router(r)
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    # browsers ask for this at the site root whatever the page's <link> says
+    return FileResponse(_static_dir / "favicon.ico", media_type="image/x-icon",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
 
 # Browser UI (server-rendered, session auth) - mounted last, owns "/"
 app.include_router(web_router)

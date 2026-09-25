@@ -1290,3 +1290,15 @@ def test_merged_products_download_and_link(web):
     assert r.status_code == 200
     assert "spreadsheetml" in r.headers["content-type"]
     assert r.content[:2] == b"PK"                     # a real .xlsx
+
+
+def test_every_page_carries_the_mms_favicon_and_root_favicon_is_served(web):
+    for path in ("/login", "/signup"):
+        html = web.get(path).text
+        assert "/favicon.ico" in html and "favicon-32.png" in html and "apple-touch-icon" in html, path
+    r = web.get("/favicon.ico")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/x-icon"
+    assert r.content[:4] == b"\x00\x00\x01\x00"            # a real .ico
+    assert web.get("/static/img/favicon-32.png").status_code == 200
+    _login(web, "controller")
+    assert "favicon-32.png" in web.get("/reports").text     # the signed-in pages (base.html) too
