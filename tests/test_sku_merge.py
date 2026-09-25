@@ -121,3 +121,19 @@ def test_names_match_ignoring_spacing_and_punctuation_but_not_sizes():
                names={"OLD1": "V BELT B2550", "NEW1": "V BELT B2150"})
     assert sm.merge_panel(b)["merges"] == []            # a different size is a different product
 
+
+
+def test_merge_report_lists_each_join_with_its_months_and_volumes():
+    pan = _panel({("MP", "OLD1"): OLD, ("MP", "NEW1"): NEW, ("BM", "OLD1"): OLD, ("BM", "NEW1"): NEW},
+                 names={})
+    pan["weeks"] = [f"2026-{m:02d}-28" for m in range(1, 11)]
+    merged = sm.merge_panel(pan)
+    prod, detail = sm.merge_report(pan, merged["merges"])
+    assert len(prod) == 1 and len(detail) == 2
+    row = prod.iloc[0]
+    assert (row["Old code"], row["New code"], row["Branches"]) == ("OLD1", "NEW1", 2)
+    assert row["Old code units (all branches)"] == 2 * int(sum(OLD))
+    assert detail.iloc[0]["Old code sold"] == "Jan 2026 - Jun 2026"
+    assert detail.iloc[0]["New code sold"] == "Jul 2026 - Sep 2026"
+    empty_prod, empty_detail = sm.merge_report(pan, [])
+    assert empty_prod.empty and empty_detail.empty

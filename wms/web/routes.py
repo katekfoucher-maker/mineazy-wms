@@ -2034,6 +2034,7 @@ def download(kind: str, request: Request, bcode: str = "", q: str = "",
             db, pairs=_pairs, branch_codes=_abr), "application/pdf"),
         "weekly-order": lambda: (excel.weekly_order_workbook(db, branch_code=bcode), _XLSX),
         "branch-stats": lambda: (excel.branch_stats_workbook(db), _XLSX),
+        "merged-products": lambda: (excel.merged_products_workbook(), _XLSX),
         "back-orders-csv": lambda: (csv_export.dataframe_to_csv(
             loaders.back_orders_df(db), "back_orders"), "text/csv"),
         "sales-csv": lambda: (csv_export.dataframe_to_csv(

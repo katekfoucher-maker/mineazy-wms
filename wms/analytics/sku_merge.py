@@ -191,3 +191,54 @@ def aliases(merges: list) -> dict:
     for m in merges:
         votes[str(m["old"]).upper()][str(m["new"]).upper()] += 1
     return {o: c.most_common(1)[0][0] for o, c in votes.items()}
+
+
+def merge_report(raw_pan: dict, merges: list):
+    """``(products, by_branch)`` DataFrames describing the joins, from the panel
+    as recorded (``raw_pan``, before any joining) and the merge list. ``products``
+    has one row per old -> new code (all branches); ``by_branch`` one row per
+    branch join with the months each code sold."""
+    import pandas as pd
+    keys, weeks, MAT = raw_pan["keys"], raw_pan["weeks"], np.asarray(raw_pan["MAT"], float)
+    index = {k: i for i, k in enumerate(keys)}
+
+    def span(row):
+        nz = np.nonzero(row > 0)[0]
+        if not len(nz):
+            return ""
+        f = pd.Timestamp(weeks[nz[0]]).strftime("%b %Y")
+        l = pd.Timestamp(weeks[nz[-1]]).strftime("%b %Y")
+        return f"{f} - {l}"
+
+    rows = []
+    for m in merges:
+        a, c = index.get((m["branch"], m["old"])), index.get((m["branch"], m["new"]))
+        if a is None or c is None:
+            continue
+        rows.append({
+            "Branch": m["branch"], "Product": raw_pan["item_of"].get((m["branch"], m["new"]), ""),
+            "Old code": m["old"], "New code": m["new"],
+            "Old code sold": span(MAT[a]), "New code sold": span(MAT[c]),
+            "Old code units": int(MAT[a].sum()), "New code units": int(MAT[c].sum()),
+            "Share of old history used in forecast": m.get("share"), "Basis": m.get("basis", "")})
+    cols = ["Branch", "Product", "Old code", "New code", "Old code sold", "New code sold",
+            "Old code units", "New code units", "Share of old history used in forecast", "Basis"]
+    detail = pd.DataFrame(rows, columns=cols)
+    if detail.empty:
+        return pd.DataFrame(columns=["Product", "Old code", "New code", "Branches",
+                                     "Old code units (all branches)", "New code units (all branches)",
+                                     "Avg share used in forecast"]), detail
+    prod = (detail.groupby(["Old code", "New code"], as_index=False)
+                  .agg(Product=("Product", "first"), Branches=("Branch", "nunique"),
+                       old_units=("Old code units", "sum"), new_units=("New code units", "sum"),
+                       share=("Share of old history used in forecast", "mean")))
+    prod["share"] = prod["share"].round(2)
+    prod = prod.rename(columns={"old_units": "Old code units (all branches)",
+                                "new_units": "New code units (all branches)",
+                                "share": "Avg share used in forecast"})
+    prod = prod.sort_values("Old code units (all branches)", ascending=False)[
+        ["Product", "Old code", "New code", "Branches", "Old code units (all branches)",
+         "New code units (all branches)", "Avg share used in forecast"]]
+    detail = detail.sort_values(["Old code units", "Branch"], ascending=[False, True])
+    return prod.reset_index(drop=True), detail.reset_index(drop=True)
+

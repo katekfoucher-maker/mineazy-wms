@@ -136,6 +136,27 @@ def suggested_orders_workbook(db, *, branch_id: Optional[int] = None,
     return write_workbook(sheets, path)
 
 
+def merged_products_workbook(*, out_dir: Optional[Path] = None) -> Path:
+    """Every product whose sales history was joined because it was re-coded
+    (old SKU replaced by a new one, identical name): one row per old -> new
+    code, and one row per branch."""
+    from wms.analytics import monthly_sales, sku_merge
+    from wms.analytics import weekly_forecast as wfc
+    merges = wfc.sku_merges()
+    prod, detail = sku_merge.merge_report(monthly_sales.cached_matrix_panel_raw(), merges)
+    note = pd.DataFrame({"How to read this": [
+        "A product is joined when its old SKU code stops selling in the same month a new code with the "
+        "identical name starts, at a similar unit price. The old code's sales then appear under the new code.",
+        "Sales screens and exports show the old code's full quantities under the new code.",
+        "The forecast counts the old history at 'Share of old history used' - the share of the old code's "
+        "volume the new code has actually taken over (25% to 100%).",
+        "Basis 'company-wide' means the same code change was found at 3+ branches and applied here even "
+        "though this branch's old history is short.",
+        "Switch the whole feature off with the setting weekly_merge_recoded=false."]})
+    path = Path(out_dir or settings.out) / f"merged_products_{_ts()}.xlsx"
+    return write_workbook({"Merged products": prod, "By branch": detail, "How to read": note}, path)
+
+
 def demand_forecast_workbook(*, bcode: str = "", q: str = "",
                              out_dir: Optional[Path] = None) -> Path:
     """One sheet, exactly the columns shown on the Sales & Forecasting page,

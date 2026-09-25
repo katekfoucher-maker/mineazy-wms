@@ -1281,3 +1281,12 @@ def test_flow_analysis_monthly_chart_has_a_period_selector(web):
     for q in ("fa_weeks=3", "fa_weeks=3&fa_show=individual", "fa_weeks=nonsense",
               "fa_weeks=custom&fa_from=2026-01-01&fa_to=2026-03-01"):
         assert web.get("/analysis?" + q).status_code == 200, q
+
+
+def test_merged_products_download_and_link(web):
+    _login(web, "controller")
+    assert "/download/merged-products" in web.get("/reports").text
+    r = web.get("/download/merged-products", follow_redirects=False)
+    assert r.status_code == 200
+    assert "spreadsheetml" in r.headers["content-type"]
+    assert r.content[:2] == b"PK"                     # a real .xlsx
